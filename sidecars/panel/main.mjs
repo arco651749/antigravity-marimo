@@ -77,82 +77,54 @@ function killPortListener(port = DEFAULT_PORT) {
   }
 }
 
-// Ensure default starter notebooks (both shared toolbox and conversation session)
+// Ensure per-conversation session directory & marimo_session.py inside .marimo/<sessionId>/
 function ensureNotebooks(wsDir, convId = null) {
-  const toolboxDir = join(wsDir, 'toolbox');
-  const sessionsDir = join(toolboxDir, 'sessions');
-  if (!existsSync(sessionsDir)) {
-    mkdirSync(sessionsDir, { recursive: true });
+  if (!wsDir || !existsSync(wsDir)) {
+    return { sessionRelPath: '' };
   }
 
-  // 1. Shared toolbox
-  const sharedFile = join(toolboxDir, 'agent_toolbox.py');
-  if (!existsSync(sharedFile)) {
-    const repoStarter = join(wsDir, 'antigravity-marimo', 'toolbox', 'agent_toolbox.py');
-    if (existsSync(repoStarter)) {
-      writeFileSync(sharedFile, readFileSync(repoStarter, 'utf8'), 'utf8');
-    } else {
-      const template = `import marimo
+  const marimoBaseDir = join(wsDir, '.marimo');
+  if (!existsSync(marimoBaseDir)) {
+    mkdirSync(marimoBaseDir, { recursive: true });
+  }
+
+  // Use clean alphanumeric ID or 'default'
+  const sessionId = convId ? convId.replace(/[^a-zA-Z0-9_-]/g, '') : 'default';
+  const sessionDir = join(marimoBaseDir, sessionId);
+  if (!existsSync(sessionDir)) {
+    mkdirSync(sessionDir, { recursive: true });
+  }
+
+  const sessionFilename = 'marimo_session.py';
+  const sessionFile = join(sessionDir, sessionFilename);
+  const sessionRelPath = `.marimo/${sessionId}/${sessionFilename}`;
+
+  if (!existsSync(sessionFile)) {
+    const shortId = sessionId.slice(0, 8);
+    const sessionTemplate = `import marimo
 
 __generated_with = "0.25.1"
-app = marimo.App(width="medium", app_title="Agent Shared Toolbox")
+app = marimo.App(width="medium", app_title="Marimo Session ${shortId}")
 
 
 @app.cell
 def _():
     import marimo as mo
+    import sys
+    sys.stdout.reconfigure(encoding="utf-8")
     return (mo,)
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo):
     mo.md(
         r"""
-        # 📦 Antigravity 專案共用工具庫 (Shared Toolbox)
-        > 所有會話皆可讀取與匯入此處的成熟工具函式。
-        """
-    )
-    return
-
-
-if __name__ == "__main__":
-    app.run()
-`;
-      writeFileSync(sharedFile, template, 'utf8');
-    }
-  }
-
-  // 2. Per-conversation notebook if convId provided
-  let sessionRelPath = 'toolbox/agent_toolbox.py';
-  if (convId) {
-    const shortId = convId.replace(/[^a-zA-Z0-9]/g, '').slice(0, 8) || 'default';
-    const sessionFilename = `chat_${shortId}.py`;
-    const sessionFile = join(sessionsDir, sessionFilename);
-    sessionRelPath = `toolbox/sessions/${sessionFilename}`;
-
-    if (!existsSync(sessionFile)) {
-      const sessionTemplate = `import marimo
-
-__generated_with = "0.25.1"
-app = marimo.App(width="medium", app_title="Chat Session ${shortId}")
-
-
-@app.cell
-def _():
-    import marimo as mo
-    return (mo,)
-
-
-@app.cell
-def _(mo):
-    mo.md(
-        r"""
-        # 💬 會話專屬筆記本 (Chat Session: ${shortId})
-        > **會話識別碼**：\`${convId}\`  
+        # 💬 會話專屬筆記本 (Session: ${shortId})
+        > **會話識別碼**：\`${convId || sessionId}\`  
         > 
         > 本筆記本由當前 Antigravity 對話視窗獨立持有：
         > - 變數、執行狀態與除錯過程與其他對話完全隔離，互不干擾。
-        > - 完成且經測試穩定的程式碼，可隨時發布轉移至共用庫 \`toolbox/agent_toolbox.py\`。
+        > - 檔案路徑：\`.marimo/${sessionId}/${sessionFilename}\`
         """
     )
     return
@@ -163,8 +135,8 @@ def _(mo):
     mo.md(
         r"""
         ---
-        ## 📌 本次會話筆記區塊
-        * 在此會話中 AI 產生的程式碼與 Gotchas 會優先記錄於此。
+        ## 📌 會話專屬程式碼與 Gotchas
+        * 在此會話中產生的 Python 程式碼、踩坑點與互動控制面板皆記錄於此。
         """
     )
     return
@@ -173,11 +145,10 @@ def _(mo):
 if __name__ == "__main__":
     app.run()
 `;
-      writeFileSync(sessionFile, sessionTemplate, 'utf8');
-    }
+    writeFileSync(sessionFile, sessionTemplate, 'utf8');
   }
 
-  return { sharedRelPath: 'toolbox/agent_toolbox.py', sessionRelPath };
+  return { sessionRelPath };
 }
 
 // Find all marimo notebooks in workspace, classified by role
@@ -185,14 +156,20 @@ function listNotebooks(wsDir, currentConvId = null) {
   const results = [];
   if (!wsDir || !existsSync(wsDir)) return results;
 
-  const currentShortId = currentConvId ? currentConvId.replace(/[^a-zA-Z0-9]/g, '').slice(0, 8) : null;
+  const currentCleanId = currentConvId ? currentConvId.replace(/[^a-zA-Z0-9_-]/g, '') : null;
+  const currentShortId = currentCleanId ? currentCleanId.slice(0, 8) : null;
 
   const walk = (dir, depth = 0) => {
-    if (depth > 3) return;
+    if (depth > 4) return;
     try {
       const entries = readdirSync(dir, { withFileTypes: true });
       for (const entry of entries) {
-        if (entry.name.startsWith('.') || entry.name === 'node_modules' || entry.name === '__pycache__' || entry.name === '__marimo__') continue;
+        // Skip hidden dot-dirs EXCEPT .marimo
+        if (entry.name.startsWith('.')) {
+          if (entry.name !== '.marimo') continue;
+        }
+        if (entry.name === 'node_modules' || entry.name === '__pycache__' || entry.name === '__marimo__' || entry.name === '.git') continue;
+
         const fullPath = join(dir, entry.name);
         if (entry.isDirectory()) {
           walk(fullPath, depth + 1);
@@ -200,21 +177,29 @@ function listNotebooks(wsDir, currentConvId = null) {
           try {
             const content = readFileSync(fullPath, 'utf8');
             if (content.includes('marimo.App(') || content.includes('import marimo')) {
-              const relPath = relative(wsDir, fullPath).replace(/\\\\/g, '/');
-              let role = 'other';
+              const relPath = relative(wsDir, fullPath).replace(/\\/g, '/');
+              let role = 'project';
               let displayName = entry.name;
 
-              if (relPath === 'toolbox/agent_toolbox.py') {
-                role = 'shared';
-                displayName = `📦 專案共用工具庫 (${entry.name})`;
-              } else if (relPath.startsWith('toolbox/sessions/')) {
-                if (currentShortId && entry.name.includes(currentShortId)) {
+              // Check if inside .marimo/<sessionId>/...
+              if (relPath.startsWith('.marimo/')) {
+                const parts = relPath.split('/');
+                const sessId = parts[1] || '';
+                const isCurrent = currentCleanId && (sessId === currentCleanId || (currentShortId && sessId.startsWith(currentShortId)));
+
+                if (isCurrent) {
                   role = 'current_session';
-                  displayName = `⭐️ 當前會話專屬 (${entry.name})`;
+                  displayName = entry.name === 'marimo_session.py'
+                    ? `⭐️ 當前會話預設 (${entry.name})`
+                    : `⭐️ 當前會話 (${entry.name})`;
                 } else {
                   role = 'other_session';
-                  displayName = `💬 歷史會話 (${entry.name})`;
+                  const shortOther = sessId.slice(0, 8);
+                  displayName = `💬 其它會話 [${shortOther}] (${entry.name})`;
                 }
+              } else {
+                role = 'project';
+                displayName = `📄 專案筆記 (${relPath})`;
               }
 
               results.push({
@@ -238,13 +223,20 @@ function listNotebooks(wsDir, currentConvId = null) {
 
   walk(wsDir);
 
-  // Sort: current_session first, then shared, then others
+  // Sort: current_session first (with marimo_session.py top), then project, then other_session
   results.sort((a, b) => {
-    const order = { current_session: 0, shared: 1, other: 2, other_session: 3 };
-    return (order[a.role] ?? 4) - (order[b.role] ?? 4);
+    const roleOrder = { current_session: 0, project: 1, other_session: 2 };
+    const orderDiff = (roleOrder[a.role] ?? 3) - (roleOrder[b.role] ?? 3);
+    if (orderDiff !== 0) return orderDiff;
+    if (a.role === 'current_session') {
+      if (a.name === 'marimo_session.py') return -1;
+      if (b.name === 'marimo_session.py') return 1;
+    }
+    return a.relativePath.localeCompare(b.relativePath);
   });
 
   return results;
+}
 }
 
 // Start Marimo in the currently active workspace directory
@@ -345,7 +337,7 @@ const handleStatus = async (data) => {
     notebookUrl: `http://127.0.0.1:${DEFAULT_PORT}/?file=${encodeURIComponent(sessionRelPath)}`,
     activeNotebook: resolve(activeWorkspaceRoot, sessionRelPath),
     activeNotebookRel: sessionRelPath,
-    workspaceRoot: activeWorkspaceRoot.replace(/\\\\/g, '/'),
+    workspaceRoot: activeWorkspaceRoot.replace(/\\/g, '/'),
     workspaceName: basename(activeWorkspaceRoot) || activeWorkspaceRoot,
     conversationId: convId,
     notebooks
@@ -370,7 +362,7 @@ app.api('/api/workspace', async (data) => {
   const notebooks = listNotebooks(activeWorkspaceRoot, convId);
 
   return {
-    workspaceRoot: activeWorkspaceRoot.replace(/\\\\/g, '/'),
+    workspaceRoot: activeWorkspaceRoot.replace(/\\/g, '/'),
     workspaceName: basename(activeWorkspaceRoot) || activeWorkspaceRoot,
     conversationId: convId,
     activeNotebookRel: sessionRelPath,
@@ -392,7 +384,7 @@ app.api('/api/restart', async () => {
 
 app.api('/api/switch-notebook', async (data) => {
   if (!data?.notebook) return { error: 'Missing notebook path' };
-  const notebookRel = data.notebook.replace(/\\\\/g, '/');
+  const notebookRel = data.notebook.replace(/\\/g, '/');
   return { 
     success: true, 
     activeNotebookRel: notebookRel,
