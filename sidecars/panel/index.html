@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Marimo Notebook - Antigravity</title>
+  <script src="/preload.js"></script>
   <style>
     :root {
       --bg-primary: #0f172a;
@@ -69,9 +70,30 @@
       white-space: nowrap;
     }
 
+    .workspace-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      background-color: var(--bg-primary);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      padding: 3px 8px;
+      font-size: 11px;
+      color: var(--text-main);
+      max-width: 140px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      cursor: default;
+    }
+
+    .ws-icon {
+      font-size: 12px;
+    }
+
     .notebook-selector-container {
       flex: 1;
-      max-width: 260px;
+      max-width: 220px;
       display: flex;
       align-items: center;
     }
@@ -250,6 +272,13 @@
       <span class="brand-title">Marimo</span>
     </div>
 
+    <!-- Active Workspace Pill -->
+    <div id="workspacePill" class="workspace-pill" title="目前專案工作目錄">
+      <span class="ws-icon">📁</span>
+      <span id="workspaceName" class="ws-name">載入專案中...</span>
+    </div>
+
+    <!-- Active Notebook Selector -->
     <div class="notebook-selector-container">
       <select id="notebookSelect" class="notebook-select" title="切換當前編輯的筆記本 (即時無延遲)">
         <option value="">正在載入筆記本清單...</option>
@@ -300,6 +329,8 @@
     const statusDot = document.getElementById("statusDot");
     const statusText = document.getElementById("statusText");
     const statusBadge = document.getElementById("statusBadge");
+    const workspaceName = document.getElementById("workspaceName");
+    const workspacePill = document.getElementById("workspacePill");
     const notebookSelect = document.getElementById("notebookSelect");
     const btnReload = document.getElementById("btnReload");
     const btnHome = document.getElementById("btnHome");
@@ -309,10 +340,34 @@
 
     let isConnected = false;
     let currentNotebook = "";
+    let currentWorkspaceUri = null;
 
     function getTargetUrl(fileRel) {
       if (!fileRel) return MARIMO_BASE_URL;
       return MARIMO_BASE_URL + "/?file=" + encodeURIComponent(fileRel);
+    }
+
+    async function syncWorkspace(uri) {
+      if (!uri) return;
+      currentWorkspaceUri = uri;
+      try {
+        const res = await fetch("/api/workspace", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ uri })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          workspaceName.textContent = data.workspaceName || "專案工作區";
+          workspacePill.title = data.workspaceRoot || uri;
+          updateNotebooksDropdown(data.notebooks, data.activeNotebookRel);
+          if (data.activeNotebookRel) {
+            iframe.src = getTargetUrl(data.activeNotebookRel);
+          }
+        }
+      } catch (err) {
+        console.warn("Failed to sync workspace:", err);
+      }
     }
 
     async function checkStatus() {
@@ -321,6 +376,11 @@
         if (!res.ok) throw new Error("HTTP error " + res.status);
         const data = await res.json();
         
+        if (data.workspaceName) {
+          workspaceName.textContent = data.workspaceName;
+          workspacePill.title = data.workspaceRoot;
+        }
+
         updateNotebooksDropdown(data.notebooks, data.activeNotebookRel);
 
         if (data.running) {
@@ -357,11 +417,15 @@
     }
 
     function updateNotebooksDropdown(notebooks, activeRel) {
-      if (!notebooks || notebooks.length === 0) return;
+      if (!notebooks || notebooks.length === 0) {
+        notebookSelect.innerHTML = '<option value="">無可用筆記本 (新建中...)</option>';
+        return;
+      }
       
       const prevVal = notebookSelect.value;
-      // Only rebuild dropdown if count changed or empty
-      if (notebookSelect.options.length !== notebooks.length) {
+      const countChanged = notebookSelect.options.length !== notebooks.length;
+      
+      if (countChanged || !notebookSelect.value) {
         notebookSelect.innerHTML = "";
         notebooks.forEach(nb => {
           const opt = document.createElement("option");
@@ -373,9 +437,7 @@
           notebookSelect.appendChild(opt);
         });
       }
-      if (activeRel && !currentNotebook) {
-        currentNotebook = activeRel;
-      }
+      currentNotebook = activeRel || notebookSelect.value;
     }
 
     // Instant switch without server kill or artificial delay
@@ -386,7 +448,7 @@
       currentNotebook = selected;
       const targetUrl = getTargetUrl(selected);
 
-      // Instantly navigate iframe (zero reboot!)
+      // Instantly navigate iframe
       iframe.src = targetUrl;
 
       // Notify backend to remember active notebook in background
@@ -435,6 +497,24 @@
     btnExternal.addEventListener("click", () => {
       window.open(getTargetUrl(currentNotebook), "_blank");
     });
+
+    // Sidecar Workspace Hook initialization
+    if (window.sidecar) {
+      if (typeof window.sidecar.getWorkspaceUris === 'function') {
+        window.sidecar.getWorkspaceUris().then(uris => {
+          if (uris && uris.length > 0) {
+            syncWorkspace(uris[0]);
+          }
+        }).catch(console.warn);
+      }
+      if (typeof window.sidecar.onWorkspaceChange === 'function') {
+        window.sidecar.onWorkspaceChange((newUris) => {
+          if (newUris && newUris.length > 0) {
+            syncWorkspace(newUris[0]);
+          }
+        });
+      }
+    }
 
     // Start polling
     checkStatus();
