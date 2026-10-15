@@ -210,6 +210,31 @@ function listNotebooks(wsDir, currentConvId = null) {
 const workspaceServers = new Map();
 const startPromises = new Map();
 
+// Map to track the currently active notebook per workspace + conversation
+// key: `${cleanWs}:${sessionId}` -> relativePath (e.g. '.marimo/xxx/data_analysis.py')
+const sessionActiveNotebooks = new Map();
+
+function getActiveNotebook(wsDir, convId) {
+  const cleanWs = resolve(wsDir);
+  const sessionId = convId ? convId.replace(/[^a-zA-Z0-9_-]/g, '') : 'default';
+  const sessionKey = `${cleanWs}:${sessionId}`;
+  let activeRel = sessionActiveNotebooks.get(sessionKey);
+  if (activeRel && existsSync(join(cleanWs, activeRel))) {
+    return activeRel;
+  }
+  const { sessionRelPath } = ensureNotebooks(cleanWs, convId);
+  sessionActiveNotebooks.set(sessionKey, sessionRelPath);
+  return sessionRelPath;
+}
+
+function setActiveNotebook(wsDir, convId, relPath) {
+  if (!relPath) return;
+  const cleanWs = resolve(wsDir);
+  const sessionId = convId ? convId.replace(/[^a-zA-Z0-9_-]/g, '') : 'default';
+  const sessionKey = `${cleanWs}:${sessionId}`;
+  sessionActiveNotebooks.set(sessionKey, relPath.replace(/\\/g, '/'));
+}
+
 // Deterministic port allocation per workspace (2718-2767)
 function getPortForWorkspace(wsDir) {
   if (!wsDir) return DEFAULT_PORT;
@@ -338,16 +363,17 @@ const handleStatus = async (data) => {
   const { ws, port } = resolveRequestWorkspace(data);
   const isAlive = await checkServerAlive(port);
   const convId = data?.conversationId || null;
-  const { sessionRelPath } = ensureNotebooks(ws, convId);
+  ensureNotebooks(ws, convId);
+  const activeRel = getActiveNotebook(ws, convId);
   const notebooks = listNotebooks(ws, convId);
 
   return {
     running: isAlive,
     port,
     url: `http://127.0.0.1:${port}`,
-    notebookUrl: `http://127.0.0.1:${port}/?file=${encodeURIComponent(sessionRelPath)}`,
-    activeNotebook: resolve(ws, sessionRelPath),
-    activeNotebookRel: sessionRelPath,
+    notebookUrl: `http://127.0.0.1:${port}/?file=${encodeURIComponent(activeRel)}`,
+    activeNotebook: resolve(ws, activeRel),
+    activeNotebookRel: activeRel,
     workspaceRoot: ws.replace(/\\/g, '/'),
     workspaceName: basename(ws) || ws,
     conversationId: convId,
@@ -370,18 +396,19 @@ app.api('/api/workspace', async (data) => {
 
   const port = getPortForWorkspace(activeWorkspaceRoot);
   const isAlive = await checkServerAlive(port);
-  const { sessionRelPath } = ensureNotebooks(activeWorkspaceRoot, convId);
+  ensureNotebooks(activeWorkspaceRoot, convId);
+  const activeRel = getActiveNotebook(activeWorkspaceRoot, convId);
   const notebooks = listNotebooks(activeWorkspaceRoot, convId);
 
   return {
     running: isAlive,
     port,
     url: `http://127.0.0.1:${port}`,
-    notebookUrl: `http://127.0.0.1:${port}/?file=${encodeURIComponent(sessionRelPath)}`,
+    notebookUrl: `http://127.0.0.1:${port}/?file=${encodeURIComponent(activeRel)}`,
     workspaceRoot: activeWorkspaceRoot.replace(/\\/g, '/'),
     workspaceName: basename(activeWorkspaceRoot) || activeWorkspaceRoot,
     conversationId: convId,
-    activeNotebookRel: sessionRelPath,
+    activeNotebookRel: activeRel,
     notebooks
   };
 });
@@ -407,8 +434,12 @@ app.api('/api/restart', async (data) => {
 
 app.api('/api/switch-notebook', async (data) => {
   if (!data?.notebook) return { error: 'Missing notebook path' };
-  const { port } = resolveRequestWorkspace(data);
+  const { ws, port } = resolveRequestWorkspace(data);
+  const convId = data?.conversationId || null;
   const notebookRel = data.notebook.replace(/\\/g, '/');
+  
+  setActiveNotebook(ws, convId, notebookRel);
+
   return { 
     success: true, 
     activeNotebookRel: notebookRel,
@@ -453,6 +484,7 @@ if __name__ == "__main__":
     writeFileSync(targetFile, template, 'utf8');
   }
 
+  setActiveNotebook(ws, convId, targetRel);
   const notebooks = listNotebooks(ws, convId);
   return {
     success: true,

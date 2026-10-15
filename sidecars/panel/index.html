@@ -621,8 +621,7 @@
           workspacePill.title = data.workspaceRoot || uri;
           updateNotebooksDropdown(data.notebooks, data.activeNotebookRel);
           if (data.activeNotebookRel) {
-            currentNotebook = data.activeNotebookRel;
-            iframe.src = getTargetUrl(data.activeNotebookRel, true);
+            navigateToNotebook(data.activeNotebookRel, true);
           }
         }
       } catch (err) {
@@ -664,7 +663,7 @@
             btnStartServer.style.display = "none";
             
             if (iframe.src === "about:blank" || !iframe.src.includes(currentBaseUrl)) {
-              iframe.src = getTargetUrl(data.activeNotebookRel, true);
+              navigateToNotebook(currentNotebook || data.activeNotebookRel, true);
             }
           }
         } else {
@@ -685,16 +684,45 @@
       }
     }
 
-    function updateNotebooksDropdown(notebooks, activeRel) {
+    function navigateToNotebook(notebookRel, force = true) {
+      if (!notebookRel) return;
+      currentNotebook = notebookRel;
+      if (notebookSelect.value !== notebookRel) {
+        notebookSelect.value = notebookRel;
+      }
+      iframe.src = getTargetUrl(notebookRel, force);
+
+      apiFetch("/api/switch-notebook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          notebook: notebookRel, 
+          conversationId: currentConvId,
+          workspaceUri: currentWorkspaceUri
+        })
+      }).catch(console.warn);
+    }
+
+    function updateNotebooksDropdown(notebooks, serverActiveRel) {
       if (!notebooks || notebooks.length === 0) {
         notebookSelect.innerHTML = '<option value="">無可用筆記本 (新建中...)</option>';
         return;
       }
-      
-      const prevVal = notebookSelect.value;
-      const countChanged = notebookSelect.options.length !== notebooks.length;
-      
-      if (countChanged || !notebookSelect.value) {
+
+      // Prioritize current selection if valid in list, else server active notebook, else 1st notebook
+      let targetVal = currentNotebook;
+      const currentValid = notebooks.some(nb => nb.relativePath === targetVal);
+      if (!targetVal || !currentValid) {
+        targetVal = serverActiveRel || notebooks[0].relativePath;
+        currentNotebook = targetVal;
+      }
+
+      const currentOptions = Array.from(notebookSelect.options).map(o => o.value);
+      const newOptions = notebooks.map(nb => nb.relativePath);
+      const isSameList = currentOptions.length === newOptions.length &&
+                         currentOptions.every((val, idx) => val === newOptions[idx]);
+
+      if (!isSameList) {
         notebookSelect.innerHTML = "";
         notebooks.forEach(nb => {
           const opt = document.createElement("option");
@@ -704,39 +732,27 @@
             opt.style.fontWeight = 'bold';
             opt.style.color = 'var(--accent-purple)';
           }
-          if (nb.relativePath === (activeRel || prevVal)) {
+          if (nb.relativePath === targetVal) {
             opt.selected = true;
           }
           notebookSelect.appendChild(opt);
         });
       }
-      currentNotebook = activeRel || notebookSelect.value;
+
+      if (notebookSelect.value !== targetVal) {
+        notebookSelect.value = targetVal;
+      }
     }
 
-    // Instant switch without server kill or artificial delay
-    notebookSelect.addEventListener("change", async (e) => {
+    // Direct switch with guaranteed reload and backend sync
+    notebookSelect.addEventListener("change", (e) => {
       const selected = e.target.value;
-      if (!selected || selected === currentNotebook) return;
-      
-      currentNotebook = selected;
-      const targetUrl = getTargetUrl(selected);
-
-      // Instantly navigate iframe
-      iframe.src = targetUrl;
-
-      // Notify backend
-      apiFetch("/api/switch-notebook", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          notebook: selected, 
-          conversationId: currentConvId 
-        })
-      }).catch(console.warn);
+      if (!selected) return;
+      navigateToNotebook(selected, true);
     });
 
     btnReload.addEventListener("click", () => {
-      iframe.src = getTargetUrl(currentNotebook);
+      navigateToNotebook(currentNotebook || notebookSelect.value, true);
     });
 
     function openNewNotebookModal() {
@@ -787,8 +803,7 @@
         closeNewNotebookModal();
         updateNotebooksDropdown(data.notebooks, data.activeNotebookRel);
         if (data.activeNotebookRel) {
-          currentNotebook = data.activeNotebookRel;
-          iframe.src = getTargetUrl(data.activeNotebookRel);
+          navigateToNotebook(data.activeNotebookRel, true);
         }
       } catch (err) {
         modalErrorMsg.textContent = "建立失敗: " + (err.message || err);
