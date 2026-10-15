@@ -46,8 +46,8 @@ flowchart LR
     end
 
     subgraph LocalServices["本機背景服務"]
-        NotebookFile["toolbox/agent_toolbox.py\n(純 Python 筆記本)"]
-        MarimoServer["Marimo Edit Server\n(marimo edit --headless --no-token --watch)"]
+        NotebookFile[".marimo/<session_id>/marimo_session.py\n(會話專屬反應式筆記本)"]
+        MarimoServer["Marimo Edit Server\n(marimo edit . --headless --no-token --watch)"]
     end
 
     Agent -->|1. 寫入代碼與 Gotchas| NotebookFile
@@ -157,7 +157,7 @@ def _(clean_text_data, mo):
 
 隨時可將筆記本中的邏輯匯出為可獨立執行的乾淨 Python 程式：
 ```powershell
-python.exe -m marimo export script toolbox/agent_toolbox.py -o standalone_script.py
+python.exe -m marimo export script .marimo/<session_id>/marimo_session.py -o standalone_script.py
 ```
 
 ---
