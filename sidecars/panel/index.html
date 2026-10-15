@@ -345,7 +345,7 @@
   </main>
 
   <script>
-    const MARIMO_BASE_URL = "http://127.0.0.1:2718";
+    let currentBaseUrl = "http://127.0.0.1:2718";
     const iframe = document.getElementById("marimoFrame");
     const overlay = document.getElementById("overlay");
     const overlayTitle = document.getElementById("overlayTitle");
@@ -393,9 +393,14 @@
       return fetch(url, options);
     }
 
-    function getTargetUrl(fileRel) {
-      if (!fileRel) return MARIMO_BASE_URL;
-      return MARIMO_BASE_URL + "/?file=" + encodeURIComponent(fileRel);
+    function getTargetUrl(fileRel, forceRefresh = false) {
+      const base = currentBaseUrl || "http://127.0.0.1:2718";
+      if (!fileRel) return base;
+      let url = base + "/?file=" + encodeURIComponent(fileRel);
+      if (forceRefresh) {
+        url += "&_t=" + Date.now();
+      }
+      return url;
     }
 
     async function syncWorkspace(uri) {
@@ -412,11 +417,15 @@
         });
         if (res.ok) {
           const data = await res.json();
+          if (data.url) currentBaseUrl = data.url;
+          else if (data.port) currentBaseUrl = `http://127.0.0.1:${data.port}`;
+
           workspaceName.textContent = data.workspaceName || "專案工作區";
           workspacePill.title = data.workspaceRoot || uri;
           updateNotebooksDropdown(data.notebooks, data.activeNotebookRel);
           if (data.activeNotebookRel) {
-            iframe.src = getTargetUrl(data.activeNotebookRel);
+            currentNotebook = data.activeNotebookRel;
+            iframe.src = getTargetUrl(data.activeNotebookRel, true);
           }
         }
       } catch (err) {
@@ -429,11 +438,17 @@
         const res = await apiFetch("/api/status", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ conversationId: currentConvId })
+          body: JSON.stringify({ 
+            conversationId: currentConvId,
+            workspaceUri: currentWorkspaceUri
+          })
         });
         if (!res.ok) throw new Error("HTTP error " + res.status);
         const data = await res.json();
         
+        if (data.url) currentBaseUrl = data.url;
+        else if (data.port) currentBaseUrl = `http://127.0.0.1:${data.port}`;
+
         if (data.workspaceName) {
           workspaceName.textContent = data.workspaceName;
           workspacePill.title = data.workspaceRoot;
@@ -451,14 +466,13 @@
             overlay.classList.add("hidden");
             btnStartServer.style.display = "none";
             
-            // Initial load with current conversation's active notebook
-            if (iframe.src === "about:blank" || !iframe.src.includes("2718")) {
-              iframe.src = getTargetUrl(data.activeNotebookRel);
+            if (iframe.src === "about:blank" || !iframe.src.includes(currentBaseUrl)) {
+              iframe.src = getTargetUrl(data.activeNotebookRel, true);
             }
           }
         } else {
           isConnected = false;
-          statusText.textContent = "已停止";
+          statusText.textContent = "未啟動";
           statusDot.style.backgroundColor = "var(--accent-red)";
           statusBadge.style.color = "var(--accent-red)";
           statusBadge.style.backgroundColor = "rgba(239, 68, 68, 0.1)";
@@ -553,7 +567,7 @@
     });
 
     btnHome.addEventListener("click", () => {
-      iframe.src = MARIMO_BASE_URL + "/";
+      iframe.src = currentBaseUrl + "/";
     });
 
     btnRestart.addEventListener("click", async () => {
@@ -561,9 +575,16 @@
       overlayDesc.textContent = "正在重新啟動核心服務...";
       overlay.classList.remove("hidden");
       try {
-        await apiFetch("/api/restart", { method: "POST" });
+        await apiFetch("/api/restart", { 
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ 
+            conversationId: currentConvId,
+            workspaceUri: currentWorkspaceUri
+          })
+        });
         setTimeout(() => {
-          iframe.src = getTargetUrl(currentNotebook);
+          iframe.src = getTargetUrl(currentNotebook, true);
           checkStatus();
         }, 1200);
       } catch (err) {
@@ -575,7 +596,14 @@
       overlayTitle.textContent = "正在啟動 Marimo...";
       btnStartServer.style.display = "none";
       try {
-        await apiFetch("/api/start", { method: "POST" });
+        await apiFetch("/api/start", { 
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ 
+            conversationId: currentConvId,
+            workspaceUri: currentWorkspaceUri
+          })
+        });
         setTimeout(checkStatus, 1200);
       } catch (err) {
         alert("啟動失敗: " + err.message);
@@ -588,6 +616,16 @@
     });
 
     // Sidecar Workspace Hook initialization
+    const refreshWorkspaceUris = () => {
+      if (window.sidecar && typeof window.sidecar.getWorkspaceUris === 'function') {
+        window.sidecar.getWorkspaceUris().then(uris => {
+          if (uris && uris.length > 0 && uris[0] !== currentWorkspaceUri) {
+            syncWorkspace(uris[0]);
+          }
+        }).catch(console.warn);
+      }
+    };
+
     if (window.sidecar) {
       if (typeof window.sidecar.getWorkspaceUris === 'function') {
         window.sidecar.getWorkspaceUris().then(uris => {
@@ -604,6 +642,15 @@
         });
       }
     }
+
+    // Auto re-sync workspace when user clicks back to this tab
+    window.addEventListener('focus', refreshWorkspaceUris);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        refreshWorkspaceUris();
+        checkStatus();
+      }
+    });
 
     // Start polling
     checkStatus();

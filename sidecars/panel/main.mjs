@@ -206,81 +206,116 @@ function listNotebooks(wsDir, currentConvId = null) {
   return results;
 }
 
-// Start Marimo in the currently active workspace directory
+// Workspace servers registry: wsDir -> { port, child, running }
+const workspaceServers = new Map();
+const startPromises = new Map();
+
+// Deterministic port allocation per workspace (2718-2767)
+function getPortForWorkspace(wsDir) {
+  if (!wsDir) return DEFAULT_PORT;
+  let hash = 0;
+  const clean = wsDir.toLowerCase().replace(/\\/g, '/');
+  for (let i = 0; i < clean.length; i++) {
+    hash = ((hash << 5) - hash) + clean.charCodeAt(i);
+    hash |= 0;
+  }
+  return DEFAULT_PORT + (Math.abs(hash) % 50);
+}
+
+// Start Marimo for a specific workspace directory on its own dedicated port
 async function startMarimo(wsDir = activeWorkspaceRoot) {
-  ensureNotebooks(wsDir);
+  const cleanWs = resolve(wsDir);
+  ensureNotebooks(cleanWs);
+  const port = getPortForWorkspace(cleanWs);
 
-  const isAlive = await checkServerAlive(DEFAULT_PORT);
-  if (isAlive) {
-    if (runningWorkspaceDir === wsDir) {
-      console.log(`[Marimo Sidecar] Server already running on port ${DEFAULT_PORT} for ${wsDir}`);
-      return true;
-    }
-    console.log(`[Marimo Sidecar] Restarting server from old workspace (${runningWorkspaceDir}) to ${wsDir}`);
-    stopMarimo();
-    await new Promise(r => setTimeout(r, 600));
+  // Return existing in-flight startup promise if already booting
+  if (startPromises.has(cleanWs)) {
+    return await startPromises.get(cleanWs);
   }
 
-  const { cmd, prefixArgs } = getMarimoExec();
-  const args = [
-    ...prefixArgs,
-    'edit',
-    '.',
-    '--headless',
-    '--no-token',
-    '--watch',
-    '--allow-origins', '*',
-    '-p', String(DEFAULT_PORT)
-  ];
-
-  console.log(`[Marimo Sidecar] Spawning Marimo in: ${wsDir}`);
-  
-  marimoChild = spawn(cmd, args, {
-    cwd: wsDir,
-    env: { ...process.env, PYTHONUTF8: '1' },
-    stdio: ['ignore', 'pipe', 'pipe'],
-    detached: false
-  });
-
-  runningWorkspaceDir = wsDir;
-
-  marimoChild.stdout?.on('data', (d) => console.log(`[Marimo stdout] ${d}`));
-  marimoChild.stderr?.on('data', (d) => console.error(`[Marimo stderr] ${d}`));
-
-  marimoChild.on('exit', (code) => {
-    console.log(`[Marimo Sidecar] Process exited with code ${code}`);
-    marimoChild = null;
-    runningWorkspaceDir = null;
-  });
-
-  for (let i = 0; i < 16; i++) {
-    await new Promise((r) => setTimeout(r, 400));
-    if (await checkServerAlive(DEFAULT_PORT)) {
-      console.log(`[Marimo Sidecar] Server is ready on port ${DEFAULT_PORT} in ${wsDir}`);
-      return true;
+  const promise = (async () => {
+    // Check if server is already running on its port
+    const isAlive = await checkServerAlive(port);
+    if (isAlive) {
+      const existing = workspaceServers.get(cleanWs);
+      if (existing && existing.port === port && existing.running) {
+        console.log(`[Marimo Sidecar] Server already running on port ${port} for ${cleanWs}`);
+        return { port, wsDir: cleanWs, running: true };
+      }
+      // If alive but not tracked, verify or reclaim port
+      console.log(`[Marimo Sidecar] Reclaiming port ${port} for ${cleanWs}`);
+      killPortListener(port);
+      await new Promise(r => setTimeout(r, 400));
     }
-  }
 
-  return false;
+    const { cmd, prefixArgs } = getMarimoExec();
+    const args = [
+      ...prefixArgs,
+      'edit',
+      '.',
+      '--headless',
+      '--no-token',
+      '--watch',
+      '--allow-origins', '*',
+      '-p', String(port)
+    ];
+
+    console.log(`[Marimo Sidecar] Spawning Marimo for ${cleanWs} on port ${port}`);
+    
+    const child = spawn(cmd, args, {
+      cwd: cleanWs,
+      env: { ...process.env, PYTHONUTF8: '1' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: false
+    });
+
+    const entry = { port, child, running: false, wsDir: cleanWs };
+    workspaceServers.set(cleanWs, entry);
+
+    child.stdout?.on('data', (d) => console.log(`[Marimo ${port} stdout] ${d}`));
+    child.stderr?.on('data', (d) => console.error(`[Marimo ${port} stderr] ${d}`));
+
+    child.on('exit', (code) => {
+      console.log(`[Marimo Sidecar] Process for ${cleanWs} (port ${port}) exited with code ${code}`);
+      workspaceServers.delete(cleanWs);
+    });
+
+    for (let i = 0; i < 20; i++) {
+      await new Promise((r) => setTimeout(r, 300));
+      if (await checkServerAlive(port)) {
+        console.log(`[Marimo Sidecar] Server is ready on port ${port} in ${cleanWs}`);
+        entry.running = true;
+        return { port, wsDir: cleanWs, running: true };
+      }
+    }
+
+    return { port, wsDir: cleanWs, running: false };
+  })();
+
+  startPromises.set(cleanWs, promise);
+  try {
+    return await promise;
+  } finally {
+    startPromises.delete(cleanWs);
+  }
 }
 
-// Stop Marimo process and clear port
-function stopMarimo() {
-  if (marimoChild) {
-    try {
-      marimoChild.kill('SIGTERM');
-    } catch (e) {
-      console.error('[Marimo Sidecar] Error killing process:', e);
+// Stop all workspace Marimo servers on sidecar shutdown
+function stopAllMarimo() {
+  for (const [ws, entry] of workspaceServers.entries()) {
+    if (entry.child) {
+      try { entry.child.kill('SIGTERM'); } catch {}
     }
-    marimoChild = null;
+    if (entry.port) {
+      killPortListener(entry.port);
+    }
   }
-  killPortListener(DEFAULT_PORT);
-  runningWorkspaceDir = null;
+  workspaceServers.clear();
 }
 
-process.on('exit', stopMarimo);
-process.on('SIGINT', stopMarimo);
-process.on('SIGTERM', stopMarimo);
+process.on('exit', stopAllMarimo);
+process.on('SIGINT', stopAllMarimo);
+process.on('SIGTERM', stopAllMarimo);
 
 // Initialize sidecar app
 const app = new SidecarApp();
@@ -290,22 +325,31 @@ const readLocal = (name) => readFileSync(join(HERE, name), 'utf8');
 // Page routes
 app.page('/', () => readLocal('index.html'));
 
+// Helper to resolve workspace and port for request
+function resolveRequestWorkspace(data) {
+  const reqPath = toLocalPath(data?.workspaceUri || data?.uri || data?.path);
+  const targetWs = (reqPath && existsSync(reqPath)) ? resolve(reqPath) : activeWorkspaceRoot;
+  const port = getPortForWorkspace(targetWs);
+  return { ws: targetWs, port };
+}
+
 // API routes
 const handleStatus = async (data) => {
-  const isAlive = await checkServerAlive(DEFAULT_PORT);
+  const { ws, port } = resolveRequestWorkspace(data);
+  const isAlive = await checkServerAlive(port);
   const convId = data?.conversationId || null;
-  const { sessionRelPath } = ensureNotebooks(activeWorkspaceRoot, convId);
-  const notebooks = listNotebooks(activeWorkspaceRoot, convId);
+  const { sessionRelPath } = ensureNotebooks(ws, convId);
+  const notebooks = listNotebooks(ws, convId);
 
   return {
     running: isAlive,
-    port: DEFAULT_PORT,
-    url: `http://127.0.0.1:${DEFAULT_PORT}`,
-    notebookUrl: `http://127.0.0.1:${DEFAULT_PORT}/?file=${encodeURIComponent(sessionRelPath)}`,
-    activeNotebook: resolve(activeWorkspaceRoot, sessionRelPath),
+    port,
+    url: `http://127.0.0.1:${port}`,
+    notebookUrl: `http://127.0.0.1:${port}/?file=${encodeURIComponent(sessionRelPath)}`,
+    activeNotebook: resolve(ws, sessionRelPath),
     activeNotebookRel: sessionRelPath,
-    workspaceRoot: activeWorkspaceRoot.replace(/\\/g, '/'),
-    workspaceName: basename(activeWorkspaceRoot) || activeWorkspaceRoot,
+    workspaceRoot: ws.replace(/\\/g, '/'),
+    workspaceName: basename(ws) || ws,
     conversationId: convId,
     notebooks
   };
@@ -319,16 +363,21 @@ app.api('/api/workspace', async (data) => {
   const targetPath = toLocalPath(data?.uri || data?.path || data?.workspaceUri);
   const convId = data?.conversationId || null;
 
-  if (targetPath && existsSync(targetPath) && (targetPath !== activeWorkspaceRoot || runningWorkspaceDir !== targetPath)) {
-    console.log(`[Marimo Sidecar] Switching workspace to: ${targetPath}`);
-    activeWorkspaceRoot = targetPath;
+  if (targetPath && existsSync(targetPath)) {
+    activeWorkspaceRoot = resolve(targetPath);
     await startMarimo(activeWorkspaceRoot);
   }
 
+  const port = getPortForWorkspace(activeWorkspaceRoot);
+  const isAlive = await checkServerAlive(port);
   const { sessionRelPath } = ensureNotebooks(activeWorkspaceRoot, convId);
   const notebooks = listNotebooks(activeWorkspaceRoot, convId);
 
   return {
+    running: isAlive,
+    port,
+    url: `http://127.0.0.1:${port}`,
+    notebookUrl: `http://127.0.0.1:${port}/?file=${encodeURIComponent(sessionRelPath)}`,
     workspaceRoot: activeWorkspaceRoot.replace(/\\/g, '/'),
     workspaceName: basename(activeWorkspaceRoot) || activeWorkspaceRoot,
     conversationId: convId,
@@ -337,34 +386,44 @@ app.api('/api/workspace', async (data) => {
   };
 });
 
-app.api('/api/start', async () => {
-  const started = await startMarimo(activeWorkspaceRoot);
-  return { success: started, port: DEFAULT_PORT };
+app.api('/api/start', async (data) => {
+  const { ws } = resolveRequestWorkspace(data);
+  const res = await startMarimo(ws);
+  return { success: res.running, port: res.port, url: `http://127.0.0.1:${res.port}` };
 });
 
-app.api('/api/restart', async () => {
-  stopMarimo();
-  await new Promise((r) => setTimeout(r, 600));
-  const started = await startMarimo(activeWorkspaceRoot);
-  return { success: started };
+app.api('/api/restart', async (data) => {
+  const { ws, port } = resolveRequestWorkspace(data);
+  const entry = workspaceServers.get(ws);
+  if (entry) {
+    if (entry.child) try { entry.child.kill('SIGTERM'); } catch {}
+    killPortListener(port);
+    workspaceServers.delete(ws);
+  }
+  await new Promise((r) => setTimeout(r, 500));
+  const res = await startMarimo(ws);
+  return { success: res.running, port: res.port, url: `http://127.0.0.1:${res.port}` };
 });
 
 app.api('/api/switch-notebook', async (data) => {
   if (!data?.notebook) return { error: 'Missing notebook path' };
+  const { port } = resolveRequestWorkspace(data);
   const notebookRel = data.notebook.replace(/\\/g, '/');
   return { 
     success: true, 
     activeNotebookRel: notebookRel,
-    url: `http://127.0.0.1:${DEFAULT_PORT}/?file=${encodeURIComponent(notebookRel)}`
+    port,
+    url: `http://127.0.0.1:${port}/?file=${encodeURIComponent(notebookRel)}`
   };
 });
 
 app.api('/api/new-notebook', async (data) => {
+  const { ws, port } = resolveRequestWorkspace(data);
   const convId = data?.conversationId || null;
   const rawName = data?.name || 'notebook.py';
   const cleanName = basename(rawName).endsWith('.py') ? basename(rawName) : `${basename(rawName)}.py`;
   const sessionId = convId ? convId.replace(/[^a-zA-Z0-9_-]/g, '') : 'default';
-  const sessionDir = join(activeWorkspaceRoot, '.marimo', sessionId);
+  const sessionDir = join(ws, '.marimo', sessionId);
   if (!existsSync(sessionDir)) {
     mkdirSync(sessionDir, { recursive: true });
   }
@@ -391,16 +450,17 @@ if __name__ == "__main__":
     writeFileSync(targetFile, template, 'utf8');
   }
 
-  const notebooks = listNotebooks(activeWorkspaceRoot, convId);
+  const notebooks = listNotebooks(ws, convId);
   return {
     success: true,
     activeNotebookRel: targetRel,
-    url: `http://127.0.0.1:${DEFAULT_PORT}/?file=${encodeURIComponent(targetRel)}`,
+    port,
+    url: `http://127.0.0.1:${port}/?file=${encodeURIComponent(targetRel)}`,
     notebooks
   };
 });
 
-// Auto-start Marimo on launch
+// Auto-start Marimo for initial workspace on launch
 startMarimo(activeWorkspaceRoot).catch(console.error);
 
 app.run();
