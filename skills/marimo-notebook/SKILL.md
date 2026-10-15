@@ -146,3 +146,66 @@ def _(mo, my_utility_function):
 python.exe -m marimo export script .marimo/<session_id>/marimo_session.py -o dist/my_script.py
 ```
 Marimo 會自動依照依賴圖拓撲排序，輸出乾淨無裝飾器的純 Python 腳本。
+
+---
+
+## 🤝 即時結對編程與核心交互 (Live Pair-Programming via `marimo pair`)
+
+除了透過檔案編輯與熱重載更新筆記本之外，AI Agent 亦可使用 Marimo 官方的原生結對通訊協議 `marimo pair`，直接與正在背景運行的 Live Python 核心無縫互動。
+
+### 1. 探測當前活躍會話 (Discover Live Sessions)
+在執行指令前，先透過伺服器端口（預設雜湊區間 `2718–2767`，例如 Agent-Study 為 `2731`）列出當前開啟中的筆記本與其臨時 Session ID：
+```powershell
+marimo pair notebook list --url "http://127.0.0.1:<PORT>"
+```
+回傳範例：
+```json
+{
+  "notebooks": [
+    {
+      "name": "d:\\AntiGravity\\Agent-Study\\.marimo\\<session_id>\\marimo_session.py",
+      "sessions": [{ "id": "s_weej7u" }]
+    }
+  ]
+}
+```
+
+### 2. 在活躍核心中執行代碼 (Live Code Execution & Scratchpad)
+直接在指定會話的 Scratchpad（暫存區）中執行 Python 程式碼，不改動磁碟檔案，適合即時探測變數、運算臨時資料或發送 UI 反饋：
+
+* **發送 Toast 畫面通知**：
+  ```powershell
+  marimo pair execute --url "http://127.0.0.1:<PORT>" --session "<SESSION_ID>" -c "import marimo as mo; mo.status.toast('處理完成！')"
+  ```
+* **查詢執行期變數或診斷錯誤**：
+  ```powershell
+  marimo pair execute --url "http://127.0.0.1:<PORT>" --session "<SESSION_ID>" -c "import sys; print(sys.version); print(globals().keys())"
+  ```
+* **支援直接指定檔案路徑**：
+  若省略 `--session`，可帶入 `--file "<檔案路徑>"`，伺服器會自動映射解析對應的 Session ID。
+
+### 3. 使用 Code-Mode API 動態管理 Cell (Programmatic Cell Control)
+透過 `marimo._code_mode`，可在不直接修改磁碟的情況下，對使用者的活筆記本進行單元格 CRUD 與反應式重算：
+```python
+import marimo._code_mode as cm
+
+async with cm.get_context() as ctx:
+    # 建立新單元格並自動觸發執行
+    cid = ctx.create_cell("import pandas as pd\ndf = pd.DataFrame({'a': [1, 2, 3]})")
+    ctx.run_cell(cid)
+    
+    # 檢視單元格狀態與輸出
+    cell = ctx.cells[cid]
+    print(cell.status, cell.errors, [o.data for o in cell.console_outputs])
+    
+    # 編輯現有單元格
+    ctx.edit_cell(cid, "import pandas as pd\ndf = pd.DataFrame({'a': [10, 20, 30]})")
+    ctx.run_cell(cid)
+```
+
+### 4. 適用場景比較：檔案寫入 vs `marimo pair`
+| 操作模式 | 適用時機 | 特性與優勢 |
+| :--- | :--- | :--- |
+| **檔案沉澱 (`replace_file_content`)** | • 沉澱長期實用工具<br>• 編寫 Three-Block 活文檔與 Gotcha 紀錄<br>• 建立使用者自用的 `mo.ui` 測試面板 | 磁碟永久保存、納入 Git 追蹤、File Watcher 自動觸發熱重載。 |
+| **即時結對 (`marimo pair execute`)** | • 執行中臨時除錯與變數狀態探測<br>• 即時向使用者側邊欄發送 Toast 提示<br>• 快速嘗試小段 Python 邏輯而不污染磁碟檔案 | 毫秒級即時反應、直接連通記憶體核心、不改動專案歷史檔案。 |
+

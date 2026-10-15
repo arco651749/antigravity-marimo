@@ -162,5 +162,14 @@ python.exe -m marimo export script .marimo/<session_id>/marimo_session.py -o sta
 
 ---
 
+## 🤝 即時雙向結對交互 (`marimo pair`)
+
+除了檔案修改熱重載，Agent 還可透過 Marimo 原生 `marimo pair` 協議與使用者進行即時 Live 結對互動：
+* **探測 Live 會話**：`marimo pair notebook list --url http://127.0.0.1:<port>`
+* **執行暫存代碼 / 彈窗提示**：`marimo pair execute --url http://127.0.0.1:<port> --session <id> -c "import marimo as mo; mo.status.toast('處理完成！')"`
+* **Code-Mode 單元格動態增刪改查**：支援透過 `marimo._code_mode` 程式化操作 Cell 與反應式計算 DAG。
+
+---
+
 ## 📄 License
 本專案採用 [MIT License](LICENSE) 授權。
