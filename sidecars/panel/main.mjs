@@ -237,7 +237,6 @@ function listNotebooks(wsDir, currentConvId = null) {
 
   return results;
 }
-}
 
 // Start Marimo in the currently active workspace directory
 async function startMarimo(wsDir = activeWorkspaceRoot) {
