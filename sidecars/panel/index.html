@@ -271,6 +271,170 @@
     .btn-primary:hover {
       background-color: #059669;
     }
+
+    /* Modal Dialog */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.75);
+      backdrop-filter: blur(4px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+      animation: modalFadeIn 0.15s ease-out;
+    }
+
+    @keyframes modalFadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+
+    .modal-card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      width: 90%;
+      max-width: 360px;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.4);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      animation: modalScaleIn 0.15s ease-out;
+    }
+
+    @keyframes modalScaleIn {
+      from { transform: scale(0.95); opacity: 0; }
+      to { transform: scale(1); opacity: 1; }
+    }
+
+    .modal-header {
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .modal-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-main);
+    }
+
+    .modal-close {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      font-size: 18px;
+      line-height: 1;
+      cursor: pointer;
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+
+    .modal-close:hover {
+      background: var(--bg-hover);
+      color: var(--text-main);
+    }
+
+    .modal-body {
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .modal-label {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-muted);
+    }
+
+    .modal-input {
+      background-color: var(--bg-primary);
+      color: var(--text-main);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 13px;
+      outline: none;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    .modal-input:focus {
+      border-color: var(--accent-green);
+      box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2);
+    }
+
+    .modal-hint {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 2px;
+      line-height: 1.4;
+    }
+
+    .modal-hint code {
+      background: var(--bg-primary);
+      padding: 2px 4px;
+      border-radius: 3px;
+      color: var(--accent-purple);
+      font-size: 10px;
+    }
+
+    .modal-error {
+      font-size: 12px;
+      color: var(--accent-red);
+      background: rgba(239, 68, 68, 0.1);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      border-radius: 4px;
+      padding: 6px 10px;
+      margin-top: 4px;
+    }
+
+    .modal-footer {
+      padding: 12px 16px;
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      background: rgba(15, 23, 42, 0.4);
+      border-top: 1px solid var(--border-color);
+    }
+
+    .modal-btn {
+      padding: 6px 14px;
+      font-size: 12px;
+      font-weight: 500;
+      border-radius: 6px;
+      cursor: pointer;
+      border: 1px solid transparent;
+      transition: all 0.15s ease;
+    }
+
+    .modal-btn-secondary {
+      background: transparent;
+      border-color: var(--border-color);
+      color: var(--text-muted);
+    }
+
+    .modal-btn-secondary:hover {
+      background: var(--bg-hover);
+      color: var(--text-main);
+    }
+
+    .modal-btn-primary {
+      background: var(--accent-green);
+      color: #ffffff;
+    }
+
+    .modal-btn-primary:hover {
+      background: #059669;
+    }
+
+    .modal-btn-primary:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
   </style>
 </head>
 <body>
@@ -333,6 +497,33 @@
     </div>
   </header>
 
+  <!-- Create Notebook Modal Dialog -->
+  <div id="newNotebookModal" class="modal-backdrop" style="display: none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 class="modal-title">新增會話筆記本</h3>
+        <button id="modalCloseBtn" class="modal-close" type="button" title="關閉">&times;</button>
+      </div>
+      <div class="modal-body">
+        <label for="newNotebookInput" class="modal-label">檔案名稱 (.py)</label>
+        <input 
+          id="newNotebookInput" 
+          type="text" 
+          class="modal-input" 
+          placeholder="例如: data_analysis.py 或 my_tool"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <p class="modal-hint">獨立儲存於當前會話目錄 <code>.marimo/&lt;session_id&gt;/</code></p>
+        <div id="modalErrorMsg" class="modal-error" style="display: none;"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="modalCancelBtn" class="modal-btn modal-btn-secondary" type="button">取消</button>
+        <button id="modalSubmitBtn" class="modal-btn modal-btn-primary" type="button">建立筆記本</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Main Viewport -->
   <main class="viewport">
     <div id="overlay" class="overlay">
@@ -364,6 +555,12 @@
     const btnRestart = document.getElementById("btnRestart");
     const btnExternal = document.getElementById("btnExternal");
     const btnStartServer = document.getElementById("btnStartServer");
+    const newNotebookModal = document.getElementById("newNotebookModal");
+    const newNotebookInput = document.getElementById("newNotebookInput");
+    const modalCloseBtn = document.getElementById("modalCloseBtn");
+    const modalCancelBtn = document.getElementById("modalCancelBtn");
+    const modalSubmitBtn = document.getElementById("modalSubmitBtn");
+    const modalErrorMsg = document.getElementById("modalErrorMsg");
 
     let isConnected = false;
     let currentNotebook = "";
@@ -542,27 +739,83 @@
       iframe.src = getTargetUrl(currentNotebook);
     });
 
-    btnNewNotebook.addEventListener("click", async () => {
-      const name = prompt("請輸入此會話的新筆記本名稱 (例如: my_tool.py):");
-      if (!name || !name.trim()) return;
+    function openNewNotebookModal() {
+      newNotebookInput.value = "";
+      modalErrorMsg.style.display = "none";
+      modalErrorMsg.textContent = "";
+      modalSubmitBtn.disabled = false;
+      modalSubmitBtn.textContent = "建立筆記本";
+      newNotebookModal.style.display = "flex";
+      setTimeout(() => newNotebookInput.focus(), 50);
+    }
+
+    function closeNewNotebookModal() {
+      newNotebookModal.style.display = "none";
+    }
+
+    async function handleCreateNotebook() {
+      const name = newNotebookInput.value.trim();
+      if (!name) {
+        modalErrorMsg.textContent = "請輸入筆記本檔案名稱 (例如: my_tool.py)";
+        modalErrorMsg.style.display = "block";
+        newNotebookInput.focus();
+        return;
+      }
+
+      if (name.toLowerCase() === "marimo.py") {
+        modalErrorMsg.textContent = "請勿命名為 marimo.py，會導致 Python 模組循環引用衝突！";
+        modalErrorMsg.style.display = "block";
+        return;
+      }
+
+      modalSubmitBtn.disabled = true;
+      modalSubmitBtn.textContent = "建立中...";
+      modalErrorMsg.style.display = "none";
+
       try {
         const res = await apiFetch("/api/new-notebook", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ 
-            name: name.trim(), 
+            name, 
             conversationId: currentConvId 
           })
         });
-        if (res.ok) {
-          const data = await res.json();
-          updateNotebooksDropdown(data.notebooks, data.activeNotebookRel);
-          if (data.activeNotebookRel) {
-            iframe.src = getTargetUrl(data.activeNotebookRel);
-          }
+        if (!res.ok) throw new Error("伺服器回應錯誤 (" + res.status + ")");
+        const data = await res.json();
+        
+        closeNewNotebookModal();
+        updateNotebooksDropdown(data.notebooks, data.activeNotebookRel);
+        if (data.activeNotebookRel) {
+          currentNotebook = data.activeNotebookRel;
+          iframe.src = getTargetUrl(data.activeNotebookRel);
         }
       } catch (err) {
-        alert("建立失敗: " + err.message);
+        modalErrorMsg.textContent = "建立失敗: " + (err.message || err);
+        modalErrorMsg.style.display = "block";
+        modalSubmitBtn.disabled = false;
+        modalSubmitBtn.textContent = "建立筆記本";
+      }
+    }
+
+    btnNewNotebook.addEventListener("click", openNewNotebookModal);
+    modalCloseBtn.addEventListener("click", closeNewNotebookModal);
+    modalCancelBtn.addEventListener("click", closeNewNotebookModal);
+    modalSubmitBtn.addEventListener("click", handleCreateNotebook);
+
+    newNotebookModal.addEventListener("click", (e) => {
+      if (e.target === newNotebookModal) {
+        closeNewNotebookModal();
+      }
+    });
+
+    newNotebookInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        handleCreateNotebook();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        closeNewNotebookModal();
       }
     });
 
@@ -588,7 +841,8 @@
           checkStatus();
         }, 1200);
       } catch (err) {
-        alert("重啟失敗: " + err.message);
+        overlayTitle.textContent = "重啟失敗";
+        overlayDesc.textContent = err.message || "伺服器重啟失敗";
       }
     });
 
@@ -606,7 +860,8 @@
         });
         setTimeout(checkStatus, 1200);
       } catch (err) {
-        alert("啟動失敗: " + err.message);
+        overlayTitle.textContent = "啟動失敗";
+        overlayDesc.textContent = err.message || "伺服器啟動失敗";
         btnStartServer.style.display = "inline-flex";
       }
     });

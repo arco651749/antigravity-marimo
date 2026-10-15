@@ -421,7 +421,10 @@ app.api('/api/new-notebook', async (data) => {
   const { ws, port } = resolveRequestWorkspace(data);
   const convId = data?.conversationId || null;
   const rawName = data?.name || 'notebook.py';
-  const cleanName = basename(rawName).endsWith('.py') ? basename(rawName) : `${basename(rawName)}.py`;
+  let cleanName = basename(rawName).endsWith('.py') ? basename(rawName) : `${basename(rawName)}.py`;
+  if (cleanName.toLowerCase() === 'marimo.py') {
+    cleanName = 'session_tool.py';
+  }
   const sessionId = convId ? convId.replace(/[^a-zA-Z0-9_-]/g, '') : 'default';
   const sessionDir = join(ws, '.marimo', sessionId);
   if (!existsSync(sessionDir)) {
