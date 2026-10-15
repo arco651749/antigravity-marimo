@@ -17,6 +17,7 @@
       --accent-yellow: #f59e0b;
       --accent-red: #ef4444;
       --accent-blue: #38bdf8;
+      --accent-purple: #a855f7;
     }
 
     * {
@@ -70,7 +71,14 @@
       white-space: nowrap;
     }
 
-    .workspace-pill {
+    .pills-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .workspace-pill, .session-pill {
       display: inline-flex;
       align-items: center;
       gap: 5px;
@@ -80,20 +88,26 @@
       padding: 3px 8px;
       font-size: 11px;
       color: var(--text-main);
-      max-width: 140px;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
       cursor: default;
     }
 
-    .ws-icon {
-      font-size: 12px;
+    .workspace-pill {
+      max-width: 120px;
+    }
+
+    .session-pill {
+      max-width: 110px;
+      border-color: rgba(168, 85, 247, 0.4);
+      color: var(--accent-purple);
+      background-color: rgba(168, 85, 247, 0.08);
     }
 
     .notebook-selector-container {
       flex: 1;
-      max-width: 220px;
+      max-width: 280px;
       display: flex;
       align-items: center;
     }
@@ -272,10 +286,17 @@
       <span class="brand-title">Marimo</span>
     </div>
 
-    <!-- Active Workspace Pill -->
-    <div id="workspacePill" class="workspace-pill" title="目前專案工作目錄">
-      <span class="ws-icon">📁</span>
-      <span id="workspaceName" class="ws-name">載入專案中...</span>
+    <!-- Workspace & Session Pills -->
+    <div class="pills-group">
+      <div id="workspacePill" class="workspace-pill" title="目前專案工作目錄">
+        <span class="ws-icon">📁</span>
+        <span id="workspaceName" class="ws-name">專案...</span>
+      </div>
+
+      <div id="sessionPill" class="session-pill" title="當前獨立會話">
+        <span class="chat-icon">💬</span>
+        <span id="sessionName" class="session-name">會話獨立</span>
+      </div>
     </div>
 
     <!-- Active Notebook Selector -->
@@ -331,6 +352,8 @@
     const statusBadge = document.getElementById("statusBadge");
     const workspaceName = document.getElementById("workspaceName");
     const workspacePill = document.getElementById("workspacePill");
+    const sessionName = document.getElementById("sessionName");
+    const sessionPill = document.getElementById("sessionPill");
     const notebookSelect = document.getElementById("notebookSelect");
     const btnReload = document.getElementById("btnReload");
     const btnHome = document.getElementById("btnHome");
@@ -341,6 +364,30 @@
     let isConnected = false;
     let currentNotebook = "";
     let currentWorkspaceUri = null;
+    let currentConvId = null;
+
+    // Detect conversation ID from sidecar preload bridge or URL query
+    function getConversationId() {
+      if (window.sidecar && window.sidecar.conversationId) {
+        return window.sidecar.conversationId;
+      }
+      const params = new URLSearchParams(window.location.search);
+      return params.get("conversationId") || null;
+    }
+
+    currentConvId = getConversationId();
+    if (currentConvId) {
+      const shortId = currentConvId.replace(/[^a-zA-Z0-9]/g, '').slice(0, 8);
+      sessionName.textContent = `會話 ${shortId}`;
+      sessionPill.title = `獨立會話 ID: ${currentConvId}`;
+    }
+
+    function apiFetch(url, options = {}) {
+      if (window.sidecar && typeof window.sidecar.fetch === "function") {
+        return window.sidecar.fetch(url, options);
+      }
+      return fetch(url, options);
+    }
 
     function getTargetUrl(fileRel) {
       if (!fileRel) return MARIMO_BASE_URL;
@@ -351,10 +398,13 @@
       if (!uri) return;
       currentWorkspaceUri = uri;
       try {
-        const res = await fetch("/api/workspace", {
+        const res = await apiFetch("/api/workspace", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ uri })
+          body: JSON.stringify({ 
+            uri, 
+            conversationId: currentConvId 
+          })
         });
         if (res.ok) {
           const data = await res.json();
@@ -372,7 +422,11 @@
 
     async function checkStatus() {
       try {
-        const res = await fetch("/api/status");
+        const res = await apiFetch("/api/status", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ conversationId: currentConvId })
+        });
         if (!res.ok) throw new Error("HTTP error " + res.status);
         const data = await res.json();
         
@@ -393,7 +447,7 @@
             overlay.classList.add("hidden");
             btnStartServer.style.display = "none";
             
-            // Initial load with active notebook
+            // Initial load with current conversation's active notebook
             if (iframe.src === "about:blank" || !iframe.src.includes("2718")) {
               iframe.src = getTargetUrl(data.activeNotebookRel);
             }
@@ -430,7 +484,11 @@
         notebooks.forEach(nb => {
           const opt = document.createElement("option");
           opt.value = nb.relativePath;
-          opt.textContent = nb.name;
+          opt.textContent = nb.displayName || nb.name;
+          if (nb.role === 'current_session') {
+            opt.style.fontWeight = 'bold';
+            opt.style.color = 'var(--accent-purple)';
+          }
           if (nb.relativePath === (activeRel || prevVal)) {
             opt.selected = true;
           }
@@ -451,11 +509,14 @@
       // Instantly navigate iframe
       iframe.src = targetUrl;
 
-      // Notify backend to remember active notebook in background
-      fetch("/api/switch-notebook", {
+      // Notify backend
+      apiFetch("/api/switch-notebook", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ notebook: selected })
+        body: JSON.stringify({ 
+          notebook: selected, 
+          conversationId: currentConvId 
+        })
       }).catch(console.warn);
     });
 
@@ -472,7 +533,7 @@
       overlayDesc.textContent = "正在重新啟動核心服務...";
       overlay.classList.remove("hidden");
       try {
-        await fetch("/api/restart", { method: "POST" });
+        await apiFetch("/api/restart", { method: "POST" });
         setTimeout(() => {
           iframe.src = getTargetUrl(currentNotebook);
           checkStatus();
@@ -486,7 +547,7 @@
       overlayTitle.textContent = "正在啟動 Marimo...";
       btnStartServer.style.display = "none";
       try {
-        await fetch("/api/start", { method: "POST" });
+        await apiFetch("/api/start", { method: "POST" });
         setTimeout(checkStatus, 1200);
       } catch (err) {
         alert("啟動失敗: " + err.message);

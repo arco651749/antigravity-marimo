@@ -24,7 +24,6 @@ function toLocalPath(uriOrPath) {
 // Current active workspace root (dynamic)
 let activeWorkspaceRoot = null;
 let runningWorkspaceDir = null;
-let activeNotebookRel = 'toolbox/agent_toolbox.py';
 const DEFAULT_PORT = 2718;
 let marimoChild = null;
 
@@ -62,7 +61,7 @@ function checkServerAlive(port = DEFAULT_PORT) {
   });
 }
 
-// Kill any process currently listening on target port (cleans up orphaned servers)
+// Kill any process currently listening on target port
 function killPortListener(port = DEFAULT_PORT) {
   if (process.platform === 'win32') {
     try {
@@ -78,22 +77,25 @@ function killPortListener(port = DEFAULT_PORT) {
   }
 }
 
-// Ensure default starter notebook exists in the given workspace
-function ensureStarterNotebook(wsDir) {
+// Ensure default starter notebooks (both shared toolbox and conversation session)
+function ensureNotebooks(wsDir, convId = null) {
   const toolboxDir = join(wsDir, 'toolbox');
-  if (!existsSync(toolboxDir)) {
-    mkdirSync(toolboxDir, { recursive: true });
+  const sessionsDir = join(toolboxDir, 'sessions');
+  if (!existsSync(sessionsDir)) {
+    mkdirSync(sessionsDir, { recursive: true });
   }
-  const starterFile = join(toolboxDir, 'agent_toolbox.py');
-  if (!existsSync(starterFile)) {
+
+  // 1. Shared toolbox
+  const sharedFile = join(toolboxDir, 'agent_toolbox.py');
+  if (!existsSync(sharedFile)) {
     const repoStarter = join(wsDir, 'antigravity-marimo', 'toolbox', 'agent_toolbox.py');
     if (existsSync(repoStarter)) {
-      writeFileSync(starterFile, readFileSync(repoStarter, 'utf8'), 'utf8');
+      writeFileSync(sharedFile, readFileSync(repoStarter, 'utf8'), 'utf8');
     } else {
       const template = `import marimo
 
 __generated_with = "0.25.1"
-app = marimo.App(width="medium", app_title="Agent Toolbox")
+app = marimo.App(width="medium", app_title="Agent Shared Toolbox")
 
 
 @app.cell
@@ -106,12 +108,8 @@ def _():
 def _(mo):
     mo.md(
         r"""
-        # 🛠️ Antigravity Agent Toolbox
-        > **活文檔代碼庫 (Living Executable Documentation)**
-        > 
-        > 本筆記本由 Antigravity AI Agent 與使用者共同維護：
-        > - 每個模組包含 **📝 踩坑紀錄 (Gotchas)**、**⚙️ 純邏輯函式** 與 **🎛️ 互動測試面板**。
-        > - 支援在 Antigravity 側邊欄即時執行、熱重載，並可一鍵匯出為獨立生產程式。
+        # 📦 Antigravity 專案共用工具庫 (Shared Toolbox)
+        > 所有會話皆可讀取與匯入此處的成熟工具函式。
         """
     )
     return
@@ -120,16 +118,74 @@ def _(mo):
 if __name__ == "__main__":
     app.run()
 `;
-      writeFileSync(starterFile, template, 'utf8');
+      writeFileSync(sharedFile, template, 'utf8');
     }
   }
-  return starterFile;
+
+  // 2. Per-conversation notebook if convId provided
+  let sessionRelPath = 'toolbox/agent_toolbox.py';
+  if (convId) {
+    const shortId = convId.replace(/[^a-zA-Z0-9]/g, '').slice(0, 8) || 'default';
+    const sessionFilename = `chat_${shortId}.py`;
+    const sessionFile = join(sessionsDir, sessionFilename);
+    sessionRelPath = `toolbox/sessions/${sessionFilename}`;
+
+    if (!existsSync(sessionFile)) {
+      const sessionTemplate = `import marimo
+
+__generated_with = "0.25.1"
+app = marimo.App(width="medium", app_title="Chat Session ${shortId}")
+
+
+@app.cell
+def _():
+    import marimo as mo
+    return (mo,)
+
+
+@app.cell
+def _(mo):
+    mo.md(
+        r"""
+        # 💬 會話專屬筆記本 (Chat Session: ${shortId})
+        > **會話識別碼**：\`${convId}\`  
+        > 
+        > 本筆記本由當前 Antigravity 對話視窗獨立持有：
+        > - 變數、執行狀態與除錯過程與其他對話完全隔離，互不干擾。
+        > - 完成且經測試穩定的程式碼，可隨時發布轉移至共用庫 \`toolbox/agent_toolbox.py\`。
+        """
+    )
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(
+        r"""
+        ---
+        ## 📌 本次會話筆記區塊
+        * 在此會話中 AI 產生的程式碼與 Gotchas 會優先記錄於此。
+        """
+    )
+    return
+
+
+if __name__ == "__main__":
+    app.run()
+`;
+      writeFileSync(sessionFile, sessionTemplate, 'utf8');
+    }
+  }
+
+  return { sharedRelPath: 'toolbox/agent_toolbox.py', sessionRelPath };
 }
 
-// Find all marimo notebooks in workspace
-function listNotebooks(wsDir) {
+// Find all marimo notebooks in workspace, classified by role
+function listNotebooks(wsDir, currentConvId = null) {
   const results = [];
   if (!wsDir || !existsSync(wsDir)) return results;
+
+  const currentShortId = currentConvId ? currentConvId.replace(/[^a-zA-Z0-9]/g, '').slice(0, 8) : null;
 
   const walk = (dir, depth = 0) => {
     if (depth > 3) return;
@@ -144,30 +200,56 @@ function listNotebooks(wsDir) {
           try {
             const content = readFileSync(fullPath, 'utf8');
             if (content.includes('marimo.App(') || content.includes('import marimo')) {
+              const relPath = relative(wsDir, fullPath).replace(/\\\\/g, '/');
+              let role = 'other';
+              let displayName = entry.name;
+
+              if (relPath === 'toolbox/agent_toolbox.py') {
+                role = 'shared';
+                displayName = `📦 專案共用工具庫 (${entry.name})`;
+              } else if (relPath.startsWith('toolbox/sessions/')) {
+                if (currentShortId && entry.name.includes(currentShortId)) {
+                  role = 'current_session';
+                  displayName = `⭐️ 當前會話專屬 (${entry.name})`;
+                } else {
+                  role = 'other_session';
+                  displayName = `💬 歷史會話 (${entry.name})`;
+                }
+              }
+
               results.push({
                 absolutePath: fullPath,
-                relativePath: relative(wsDir, fullPath).replace(/\\\\/g, '/'),
+                relativePath: relPath,
                 name: entry.name,
+                displayName,
+                role,
                 size: statSync(fullPath).size
               });
             }
           } catch {
-            // ignore unreadable files
+            // ignore unreadable
           }
         }
       }
     } catch {
-      // ignore inaccessible dirs
+      // ignore
     }
   };
 
   walk(wsDir);
+
+  // Sort: current_session first, then shared, then others
+  results.sort((a, b) => {
+    const order = { current_session: 0, shared: 1, other: 2, other_session: 3 };
+    return (order[a.role] ?? 4) - (order[b.role] ?? 4);
+  });
+
   return results;
 }
 
 // Start Marimo in the currently active workspace directory
 async function startMarimo(wsDir = activeWorkspaceRoot) {
-  ensureStarterNotebook(wsDir);
+  ensureNotebooks(wsDir);
 
   const isAlive = await checkServerAlive(DEFAULT_PORT);
   if (isAlive) {
@@ -175,7 +257,7 @@ async function startMarimo(wsDir = activeWorkspaceRoot) {
       console.log(`[Marimo Sidecar] Server already running on port ${DEFAULT_PORT} for ${wsDir}`);
       return true;
     }
-    console.log(`[Marimo Sidecar] Server running on port ${DEFAULT_PORT} is from old workspace (${runningWorkspaceDir}), killing it...`);
+    console.log(`[Marimo Sidecar] Restarting server from old workspace (${runningWorkspaceDir}) to ${wsDir}`);
     stopMarimo();
     await new Promise(r => setTimeout(r, 600));
   }
@@ -250,39 +332,49 @@ const readLocal = (name) => readFileSync(join(HERE, name), 'utf8');
 app.page('/', () => readLocal('index.html'));
 
 // API routes
-app.api('/api/status', async () => {
+const handleStatus = async (data) => {
   const isAlive = await checkServerAlive(DEFAULT_PORT);
-  const notebooks = listNotebooks(activeWorkspaceRoot);
-  const relPath = activeNotebookRel || 'toolbox/agent_toolbox.py';
+  const convId = data?.conversationId || null;
+  const { sessionRelPath } = ensureNotebooks(activeWorkspaceRoot, convId);
+  const notebooks = listNotebooks(activeWorkspaceRoot, convId);
+
   return {
     running: isAlive,
     port: DEFAULT_PORT,
     url: `http://127.0.0.1:${DEFAULT_PORT}`,
-    notebookUrl: `http://127.0.0.1:${DEFAULT_PORT}/?file=${encodeURIComponent(relPath)}`,
-    activeNotebook: resolve(activeWorkspaceRoot, relPath),
-    activeNotebookRel: relPath,
+    notebookUrl: `http://127.0.0.1:${DEFAULT_PORT}/?file=${encodeURIComponent(sessionRelPath)}`,
+    activeNotebook: resolve(activeWorkspaceRoot, sessionRelPath),
+    activeNotebookRel: sessionRelPath,
     workspaceRoot: activeWorkspaceRoot.replace(/\\\\/g, '/'),
     workspaceName: basename(activeWorkspaceRoot) || activeWorkspaceRoot,
+    conversationId: convId,
     notebooks
   };
-}, 'GET');
+};
 
-// Dynamically sync active workspace from Antigravity IDE
+app.api('/api/status', handleStatus, 'POST');
+app.api('/api/status', handleStatus, 'GET');
+
+// Dynamically sync active workspace & conversation from Antigravity IDE
 app.api('/api/workspace', async (data) => {
   const targetPath = toLocalPath(data?.uri || data?.path || data?.workspaceUri);
+  const convId = data?.conversationId || null;
+
   if (targetPath && existsSync(targetPath) && (targetPath !== activeWorkspaceRoot || runningWorkspaceDir !== targetPath)) {
     console.log(`[Marimo Sidecar] Switching workspace to: ${targetPath}`);
     activeWorkspaceRoot = targetPath;
-    activeNotebookRel = 'toolbox/agent_toolbox.py';
     await startMarimo(activeWorkspaceRoot);
   }
-  
-  const notebooks = listNotebooks(activeWorkspaceRoot);
+
+  const { sessionRelPath } = ensureNotebooks(activeWorkspaceRoot, convId);
+  const notebooks = listNotebooks(activeWorkspaceRoot, convId);
+
   return {
     workspaceRoot: activeWorkspaceRoot.replace(/\\\\/g, '/'),
     workspaceName: basename(activeWorkspaceRoot) || activeWorkspaceRoot,
-    notebooks,
-    activeNotebookRel
+    conversationId: convId,
+    activeNotebookRel: sessionRelPath,
+    notebooks
   };
 });
 
@@ -300,11 +392,11 @@ app.api('/api/restart', async () => {
 
 app.api('/api/switch-notebook', async (data) => {
   if (!data?.notebook) return { error: 'Missing notebook path' };
-  activeNotebookRel = data.notebook.replace(/\\\\/g, '/');
+  const notebookRel = data.notebook.replace(/\\\\/g, '/');
   return { 
     success: true, 
-    activeNotebookRel,
-    url: `http://127.0.0.1:${DEFAULT_PORT}/?file=${encodeURIComponent(activeNotebookRel)}`
+    activeNotebookRel: notebookRel,
+    url: `http://127.0.0.1:${DEFAULT_PORT}/?file=${encodeURIComponent(notebookRel)}`
   };
 });
 
