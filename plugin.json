@@ -1,0 +1,14 @@
+{
+  "name": "antigravity-marimo",
+  "displayName": "Marimo Reactive Notebook",
+  "description": "Antigravity Marimo 深度整合外掛：在右側輔助面板 (Auxiliary Pane) 內嵌即時執行的 Marimo Edit 筆記本，具備自動熱重載 (Hot-Reload)、活文檔踩坑紀錄 (Gotcha Log)、互動式 UI 元件與零依賴一鍵匯出生產腳本能力。",
+  "logo": "assets/logo.svg",
+  "version": "1.0.0",
+  "suggestedPrompts": [
+    "開啟 Marimo 筆記本",
+    "Open Marimo Notebook",
+    "將這段程式碼存入 Marimo",
+    "檢視 Marimo 筆記本並修復錯誤",
+    "匯出 Marimo 筆記為獨立程式"
+  ]
+}

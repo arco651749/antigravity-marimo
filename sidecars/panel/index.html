@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Marimo Notebook - Antigravity</title>
+  <style>
+    :root {
+      --bg-primary: #0f172a;
+      --bg-secondary: #1e293b;
+      --bg-hover: #334155;
+      --border-color: #334155;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --accent-green: #10b981;
+      --accent-yellow: #f59e0b;
+      --accent-red: #ef4444;
+      --accent-blue: #38bdf8;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background-color: var(--bg-primary);
+      color: var(--text-main);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* Top Navigation Toolbar */
+    .toolbar {
+      height: 44px;
+      background-color: var(--bg-secondary);
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 12px;
+      gap: 10px;
+      user-select: none;
+      z-index: 10;
+      flex-shrink: 0;
+    }
+
+    .brand-section {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .brand-icon {
+      width: 22px;
+      height: 22px;
+      flex-shrink: 0;
+    }
+
+    .brand-title {
+      font-weight: 600;
+      font-size: 13px;
+      letter-spacing: 0.3px;
+      white-space: nowrap;
+    }
+
+    .notebook-selector-container {
+      flex: 1;
+      max-width: 240px;
+      display: flex;
+      align-items: center;
+    }
+
+    .notebook-select {
+      width: 100%;
+      background-color: var(--bg-primary);
+      color: var(--text-main);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      padding: 4px 8px;
+      font-size: 12px;
+      outline: none;
+      cursor: pointer;
+      text-overflow: ellipsis;
+      overflow: hidden;
+      white-space: nowrap;
+    }
+
+    .notebook-select:focus {
+      border-color: var(--accent-green);
+    }
+
+    .actions-section {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 9999px;
+      background-color: rgba(16, 185, 129, 0.1);
+      color: var(--accent-green);
+      font-weight: 500;
+    }
+
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background-color: var(--accent-green);
+      animation: pulse 2s infinite ease-in-out;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.5; transform: scale(0.85); }
+    }
+
+    .btn-icon {
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      color: var(--text-muted);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      transition: all 0.15s ease;
+    }
+
+    .btn-icon:hover {
+      background-color: var(--bg-hover);
+      color: var(--text-main);
+      border-color: var(--border-color);
+    }
+
+    .btn-icon svg {
+      width: 15px;
+      height: 15px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    /* Main Viewport */
+    .viewport {
+      flex: 1;
+      position: relative;
+      background-color: #ffffff;
+    }
+
+    iframe {
+      width: 100%;
+      height: 100%;
+      border: none;
+      display: block;
+    }
+
+    /* Overlay / Loading State */
+    .overlay {
+      position: absolute;
+      inset: 0;
+      background-color: var(--bg-primary);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      z-index: 5;
+      transition: opacity 0.3s ease;
+    }
+
+    .overlay.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .spinner {
+      width: 36px;
+      height: 36px;
+      border: 3px solid rgba(16, 185, 129, 0.2);
+      border-top-color: var(--accent-green);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .overlay-title {
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text-main);
+    }
+
+    .overlay-desc {
+      font-size: 12px;
+      color: var(--text-muted);
+      max-width: 260px;
+      text-align: center;
+      line-height: 1.5;
+    }
+
+    .btn-primary {
+      background-color: var(--accent-green);
+      color: #ffffff;
+      border: none;
+      border-radius: 6px;
+      padding: 6px 14px;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: background-color 0.15s ease;
+    }
+
+    .btn-primary:hover {
+      background-color: #059669;
+    }
+  </style>
+</head>
+<body>
+  <!-- Top Navigation Toolbar -->
+  <header class="toolbar">
+    <div class="brand-section">
+      <svg class="brand-icon" viewBox="0 0 128 128">
+        <circle cx="64" cy="64" r="60" fill="#10b981" />
+        <circle cx="40" cy="48" r="14" fill="#ffffff" />
+        <circle cx="88" cy="48" r="14" fill="#ffffff" />
+        <circle cx="64" cy="92" r="18" fill="#ffffff" />
+      </svg>
+      <span class="brand-title">Marimo</span>
+    </div>
+
+    <div class="notebook-selector-container">
+      <select id="notebookSelect" class="notebook-select" title="切換當前編輯的筆記本">
+        <option value="">正在載入筆記本...</option>
+      </select>
+    </div>
+
+    <div class="actions-section">
+      <div id="statusBadge" class="status-badge">
+        <span id="statusDot" class="status-dot"></span>
+        <span id="statusText">啟動中</span>
+      </div>
+
+      <button id="btnReload" class="btn-icon" title="重新整理筆記本畫面">
+        <svg viewBox="0 0 24 24"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+      </button>
+
+      <button id="btnRestart" class="btn-icon" title="重新啟動 Marimo 服務">
+        <svg viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+      </button>
+
+      <button id="btnExternal" class="btn-icon" title="在外部瀏覽器打開">
+        <svg viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Viewport -->
+  <main class="viewport">
+    <div id="overlay" class="overlay">
+      <div class="spinner"></div>
+      <div id="overlayTitle" class="overlay-title">正在連接 Marimo 服務...</div>
+      <div id="overlayDesc" class="overlay-desc">正在啟動背景 Python 核心與熱重載監控 (Port 2718)</div>
+      <button id="btnStartServer" class="btn-primary" style="display: none;">啟動 Marimo 服務</button>
+    </div>
+    <iframe id="marimoFrame" src="about:blank"></iframe>
+  </main>
+
+  <script>
+    const MARIMO_BASE_URL = "http://127.0.0.1:2718";
+    const iframe = document.getElementById("marimoFrame");
+    const overlay = document.getElementById("overlay");
+    const overlayTitle = document.getElementById("overlayTitle");
+    const overlayDesc = document.getElementById("overlayDesc");
+    const statusDot = document.getElementById("statusDot");
+    const statusText = document.getElementById("statusText");
+    const statusBadge = document.getElementById("statusBadge");
+    const notebookSelect = document.getElementById("notebookSelect");
+    const btnReload = document.getElementById("btnReload");
+    const btnRestart = document.getElementById("btnRestart");
+    const btnExternal = document.getElementById("btnExternal");
+    const btnStartServer = document.getElementById("btnStartServer");
+
+    let isConnected = false;
+    let currentNotebook = "";
+
+    async function checkStatus() {
+      try {
+        const res = await fetch("/api/status");
+        if (!res.ok) throw new Error("HTTP error " + res.status);
+        const data = await res.json();
+        
+        updateNotebooksDropdown(data.notebooks, data.activeNotebookRel);
+
+        if (data.running) {
+          if (!isConnected) {
+            isConnected = true;
+            statusText.textContent = "運作中";
+            statusDot.style.backgroundColor = "var(--accent-green)";
+            statusBadge.style.color = "var(--accent-green)";
+            statusBadge.style.backgroundColor = "rgba(16, 185, 129, 0.1)";
+            overlay.classList.add("hidden");
+            btnStartServer.style.display = "none";
+            if (iframe.src === "about:blank" || !iframe.src.includes("2718")) {
+              iframe.src = MARIMO_BASE_URL;
+            }
+          }
+        } else {
+          isConnected = false;
+          statusText.textContent = "已停止";
+          statusDot.style.backgroundColor = "var(--accent-red)";
+          statusBadge.style.color = "var(--accent-red)";
+          statusBadge.style.backgroundColor = "rgba(239, 68, 68, 0.1)";
+          overlayTitle.textContent = "Marimo 服務未在執行";
+          overlayDesc.textContent = "點擊下方按鈕啟動背景 Marimo 核心服務。";
+          btnStartServer.style.display = "inline-flex";
+          overlay.classList.remove("hidden");
+        }
+      } catch (err) {
+        console.warn("Status poll error:", err);
+        statusText.textContent = "連線中斷";
+        statusDot.style.backgroundColor = "var(--accent-yellow)";
+      }
+    }
+
+    function updateNotebooksDropdown(notebooks, activeRel) {
+      if (!notebooks || notebooks.length === 0) return;
+      
+      const currentSelected = notebookSelect.value;
+      notebookSelect.innerHTML = "";
+      
+      notebooks.forEach(nb => {
+        const opt = document.createElement("option");
+        opt.value = nb.relativePath;
+        opt.textContent = nb.name;
+        if (nb.relativePath === activeRel) {
+          opt.selected = true;
+        }
+        notebookSelect.appendChild(opt);
+      });
+      currentNotebook = activeRel;
+    }
+
+    notebookSelect.addEventListener("change", async (e) => {
+      const selected = e.target.value;
+      if (!selected || selected === currentNotebook) return;
+      
+      overlayTitle.textContent = "切換筆記本中...";
+      overlayDesc.textContent = "正在載入 " + selected;
+      overlay.classList.remove("hidden");
+      
+      try {
+        await fetch("/api/switch-notebook", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ notebook: selected })
+        });
+        setTimeout(() => {
+          iframe.src = MARIMO_BASE_URL;
+          checkStatus();
+        }, 1200);
+      } catch (err) {
+        alert("切換筆記本失敗: " + err.message);
+      }
+    });
+
+    btnReload.addEventListener("click", () => {
+      iframe.src = MARIMO_BASE_URL;
+    });
+
+    btnRestart.addEventListener("click", async () => {
+      overlayTitle.textContent = "正在重啟 Marimo 伺服器...";
+      overlayDesc.textContent = "正在清理舊有進程並重新啟動核心...";
+      overlay.classList.remove("hidden");
+      try {
+        await fetch("/api/restart", { method: "POST" });
+        setTimeout(() => {
+          iframe.src = MARIMO_BASE_URL;
+          checkStatus();
+        }, 1500);
+      } catch (err) {
+        alert("重啟失敗: " + err.message);
+      }
+    });
+
+    btnStartServer.addEventListener("click", async () => {
+      overlayTitle.textContent = "正在啟動 Marimo...";
+      btnStartServer.style.display = "none";
+      try {
+        await fetch("/api/start", { method: "POST" });
+        setTimeout(checkStatus, 1500);
+      } catch (err) {
+        alert("啟動失敗: " + err.message);
+        btnStartServer.style.display = "inline-flex";
+      }
+    });
+
+    btnExternal.addEventListener("click", () => {
+      window.open(MARIMO_BASE_URL, "_blank");
+    });
+
+    // Start polling
+    checkStatus();
+    setInterval(checkStatus, 3000);
+  </script>
+</body>
+</html>
