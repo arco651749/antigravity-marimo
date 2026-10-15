@@ -28,25 +28,44 @@ description: >-
 ├── .marimo/                        # 專案等級的 Marimo 工作區目錄
 │   ├── <session_id>/               # 依 Antigravity 對話視窗 ID 獨立分割的子目錄
 │   │   ├── marimo_session.py       # ⭐️ 該會話預設專屬筆記本 (不可取名為 marimo.py 以免循環引用)
-│   │   └── [該會話產生的其他 .py]
+│   │   └── [該會話產生的其他 .py]   # 透過工具列「+」按鈕或 AI 建立的輔助模組
 │   └── <其他歷史 session_id 目錄>/
-└── [專案其他 Python 檔案]          # 例如 demo_marimo.py 或共用腳本
+└── [專案其他 Python 檔案]          # 專案原有腳本
 ```
 
 ### 關鍵規範與踩坑提示 (Gotchas)
-1. **目錄位置**：
+1. **專案內目錄約束**：
    * `.marimo/` 必須建立在目前專案根目錄下，禁止存放於外部暫存目錄或隱蔽路徑，確保程式碼可直接納入專案 Git 追蹤或版本控制。
-2. **會話隔離 (Session-Based Isolation)**：
+2. **會話嚴格過濾 (Strict Session Scoping)**：
    * 每個 Antigravity 聊天視窗擁有獨立的 `<session_id>` 目錄。
    * AI 在當前對話中實作或修改的 Python 程式碼，**一律優先寫入當前會話的 `marimo_session.py`**。
-   * 如此可確保多視窗並行除錯時，變數命名、執行順序與 DAG 圖譜完全互不衝突。
-3. **命名避免循環引用 (Circular Import Trap)**：
+   * 側邊欄下拉選單**嚴格僅列出當前會話專屬目錄 (`.marimo/<session_id>/*.py`)**，絕不混入其他歷史會話或專案雜項檔案，確保操作視覺純粹。
+3. **會話內多筆記本支援 (`+` 按鈕)**：
+   * 使用者或 AI 可在當前會話目錄下建立額外 `.py` 筆記本（例如 `data_analysis.py`）。
+   * 側邊欄頂部工具列提供 `+` 按鈕，點擊即可在當前會話目錄內新增並即時切換。
+4. **命名避免循環引用 (Circular Import Trap)**：
    * 預設筆記本必須命名為 **`marimo_session.py`**，**嚴禁命名為 `marimo.py`**。
    * *踩坑原因*：若檔案命名為 `marimo.py`，Python 在執行 `import marimo` 時會優先引用同目錄下的自身檔案（`sys.path[0]`），造成 `AttributeError: partially initialized module 'marimo' has no attribute 'App' (most likely due to a circular import)` 導致服務崩潰。
-4. **側邊欄智能感知與即時切換**：
-   * Marimo 伺服器以目錄工作區模式 (`marimo edit .`) 監聽專案根目錄。
-   * 側邊欄面板透過 `window.sidecar.conversationId` 動態感知當前會話，自動打開 `.marimo/<session_id>/marimo_session.py`。
-   * 側邊欄頂部的下拉選單提供專案內所有筆記本的毫秒級切換（0.1s 內完成，無須重啟伺服器）。
+5. **Windows UTF-8 無 BOM 規範 (No-BOM Requirement)**：
+   * 在 Windows 環境下建立或更新 `.py` 檔案時，必須確保採用 **UTF-8 No BOM** 編碼。
+   * *踩坑原因*：Windows PowerShell 預設的 `Out-File -Encoding utf8` 會寫入 `U+FEFF` (BOM)，導致 Python AST 解析器拋出 `HTTP 500: invalid non-printable character U+FEFF`。使用 Python `encoding="utf-8"` 或 Node.js `writeFileSync(..., 'utf8')` 即可保證無 BOM。
+
+---
+
+## ⚡ 多專案獨立端口常駐架構 (Multi-Workspace Port Isolation)
+
+為徹底解決「在多個專案（如 Blender 與 Agent-Study）切換分頁時彼此殺死背景進程、導致 `kernel not found` 與 WebSocket 斷線」的問題，系統採用多端口常駐調度架構：
+
+1. **依專案路徑雜湊獨立端口 (Ports 2718–2767)**：
+   * 每個專案目錄在第一次啟動時分配專屬常駐端口（例如 `Agent-Study` 使用 `2731`，`Blender` 使用 `2720`）。
+   * 切換專案時，**彼此的 Marimo 服務不會被終止**，各專案的 Python Kernel、變數與記憶體狀態在背景持續常駐。
+2. **切換分頁自動對齊 (Focus & Visibility Re-sync)**：
+   * 前端監聽 `window.addEventListener('focus')` 與 `document.addEventListener('visibilitychange')`。
+   * 當使用者滑鼠點回分頁時，前端即時感知當前工作區路徑，動態更新頂部藥丸標籤並校正連線端口。
+3. **防緩存強制重連 (`_t=timestamp`)**：
+   * 每次重載或切換工作區時帶上時間戳參數，防止瀏覽器 iframe 緩存舊的伺服器防篡改憑證（`skew protection token`），避免出現 `kernel not found`。
+4. **GPU 探測日誌正常警告**：
+   * 伺服器啟動時若出現 `[W health:451] Neither nvidia-smi nor rocm-smi succeeded, cannot get GPU stats`，為 Marimo 嘗試在 Windows 探測硬體負載儀表板時的正常警告，不影響程式運算，可直接忽略。
 
 ---
 
