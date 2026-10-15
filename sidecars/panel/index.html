@@ -301,9 +301,12 @@
 
     <!-- Active Notebook Selector -->
     <div class="notebook-selector-container">
-      <select id="notebookSelect" class="notebook-select" title="切換當前編輯的筆記本 (即時無延遲)">
-        <option value="">正在載入筆記本清單...</option>
+      <select id="notebookSelect" class="notebook-select" title="切換當前會話內的筆記本">
+        <option value="">正在載入會話筆記本...</option>
       </select>
+      <button id="btnNewNotebook" class="btn-icon" title="在此會話建立新的 Python 筆記本" style="margin-left: 4px; font-weight: bold; font-size: 15px;">
+        +
+      </button>
     </div>
 
     <div class="actions-section">
@@ -355,6 +358,7 @@
     const sessionName = document.getElementById("sessionName");
     const sessionPill = document.getElementById("sessionPill");
     const notebookSelect = document.getElementById("notebookSelect");
+    const btnNewNotebook = document.getElementById("btnNewNotebook");
     const btnReload = document.getElementById("btnReload");
     const btnHome = document.getElementById("btnHome");
     const btnRestart = document.getElementById("btnRestart");
@@ -522,6 +526,30 @@
 
     btnReload.addEventListener("click", () => {
       iframe.src = getTargetUrl(currentNotebook);
+    });
+
+    btnNewNotebook.addEventListener("click", async () => {
+      const name = prompt("請輸入此會話的新筆記本名稱 (例如: my_tool.py):");
+      if (!name || !name.trim()) return;
+      try {
+        const res = await apiFetch("/api/new-notebook", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ 
+            name: name.trim(), 
+            conversationId: currentConvId 
+          })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          updateNotebooksDropdown(data.notebooks, data.activeNotebookRel);
+          if (data.activeNotebookRel) {
+            iframe.src = getTargetUrl(data.activeNotebookRel);
+          }
+        }
+      } catch (err) {
+        alert("建立失敗: " + err.message);
+      }
     });
 
     btnHome.addEventListener("click", () => {

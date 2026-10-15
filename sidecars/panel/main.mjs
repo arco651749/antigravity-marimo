@@ -151,88 +151,56 @@ if __name__ == "__main__":
   return { sessionRelPath };
 }
 
-// Find all marimo notebooks in workspace, classified by role
+// Find all marimo notebooks belonging STRICTLY to the current conversation session
 function listNotebooks(wsDir, currentConvId = null) {
   const results = [];
   if (!wsDir || !existsSync(wsDir)) return results;
 
-  const currentCleanId = currentConvId ? currentConvId.replace(/[^a-zA-Z0-9_-]/g, '') : null;
-  const currentShortId = currentCleanId ? currentCleanId.slice(0, 8) : null;
+  const sessionId = currentConvId ? currentConvId.replace(/[^a-zA-Z0-9_-]/g, '') : 'default';
+  const sessionDir = join(wsDir, '.marimo', sessionId);
 
-  const walk = (dir, depth = 0) => {
-    if (depth > 4) return;
-    try {
-      const entries = readdirSync(dir, { withFileTypes: true });
-      for (const entry of entries) {
-        // Skip hidden dot-dirs EXCEPT .marimo
-        if (entry.name.startsWith('.')) {
-          if (entry.name !== '.marimo') continue;
-        }
-        if (entry.name === 'node_modules' || entry.name === '__pycache__' || entry.name === '__marimo__' || entry.name === '.git') continue;
+  if (!existsSync(sessionDir)) {
+    return results;
+  }
 
-        const fullPath = join(dir, entry.name);
-        if (entry.isDirectory()) {
-          walk(fullPath, depth + 1);
-        } else if (entry.isFile() && entry.name.endsWith('.py')) {
-          try {
-            const content = readFileSync(fullPath, 'utf8');
-            if (content.includes('marimo.App(') || content.includes('import marimo')) {
-              const relPath = relative(wsDir, fullPath).replace(/\\/g, '/');
-              let role = 'project';
-              let displayName = entry.name;
+  try {
+    const entries = readdirSync(sessionDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isFile() && entry.name.endsWith('.py')) {
+        const fullPath = join(sessionDir, entry.name);
+        try {
+          const content = readFileSync(fullPath, 'utf8');
+          if (content.includes('marimo.App(') || content.includes('import marimo')) {
+            const relPath = relative(wsDir, fullPath).replace(/\\/g, '/');
+            const isDefault = entry.name === 'marimo_session.py';
+            const displayName = isDefault
+              ? `⭐️ 會話預設 (${entry.name})`
+              : `📄 ${entry.name}`;
 
-              // Check if inside .marimo/<sessionId>/...
-              if (relPath.startsWith('.marimo/')) {
-                const parts = relPath.split('/');
-                const sessId = parts[1] || '';
-                const isCurrent = currentCleanId && (sessId === currentCleanId || (currentShortId && sessId.startsWith(currentShortId)));
-
-                if (isCurrent) {
-                  role = 'current_session';
-                  displayName = entry.name === 'marimo_session.py'
-                    ? `⭐️ 當前會話預設 (${entry.name})`
-                    : `⭐️ 當前會話 (${entry.name})`;
-                } else {
-                  role = 'other_session';
-                  const shortOther = sessId.slice(0, 8);
-                  displayName = `💬 其它會話 [${shortOther}] (${entry.name})`;
-                }
-              } else {
-                role = 'project';
-                displayName = `📄 專案筆記 (${relPath})`;
-              }
-
-              results.push({
-                absolutePath: fullPath,
-                relativePath: relPath,
-                name: entry.name,
-                displayName,
-                role,
-                size: statSync(fullPath).size
-              });
-            }
-          } catch {
-            // ignore unreadable
+            results.push({
+              absolutePath: fullPath,
+              relativePath: relPath,
+              name: entry.name,
+              displayName,
+              role: 'current_session',
+              isDefault,
+              size: statSync(fullPath).size
+            });
           }
+        } catch {
+          // ignore unreadable
         }
       }
-    } catch {
-      // ignore
     }
-  };
+  } catch {
+    // ignore
+  }
 
-  walk(wsDir);
-
-  // Sort: current_session first (with marimo_session.py top), then project, then other_session
+  // Sort: marimo_session.py always first, then alphabetical
   results.sort((a, b) => {
-    const roleOrder = { current_session: 0, project: 1, other_session: 2 };
-    const orderDiff = (roleOrder[a.role] ?? 3) - (roleOrder[b.role] ?? 3);
-    if (orderDiff !== 0) return orderDiff;
-    if (a.role === 'current_session') {
-      if (a.name === 'marimo_session.py') return -1;
-      if (b.name === 'marimo_session.py') return 1;
-    }
-    return a.relativePath.localeCompare(b.relativePath);
+    if (a.isDefault) return -1;
+    if (b.isDefault) return 1;
+    return a.name.localeCompare(b.name);
   });
 
   return results;
@@ -388,6 +356,47 @@ app.api('/api/switch-notebook', async (data) => {
     success: true, 
     activeNotebookRel: notebookRel,
     url: `http://127.0.0.1:${DEFAULT_PORT}/?file=${encodeURIComponent(notebookRel)}`
+  };
+});
+
+app.api('/api/new-notebook', async (data) => {
+  const convId = data?.conversationId || null;
+  const rawName = data?.name || 'notebook.py';
+  const cleanName = basename(rawName).endsWith('.py') ? basename(rawName) : `${basename(rawName)}.py`;
+  const sessionId = convId ? convId.replace(/[^a-zA-Z0-9_-]/g, '') : 'default';
+  const sessionDir = join(activeWorkspaceRoot, '.marimo', sessionId);
+  if (!existsSync(sessionDir)) {
+    mkdirSync(sessionDir, { recursive: true });
+  }
+  const targetFile = join(sessionDir, cleanName);
+  const targetRel = `.marimo/${sessionId}/${cleanName}`;
+  if (!existsSync(targetFile)) {
+    const template = `import marimo
+
+__generated_with = "0.25.1"
+app = marimo.App(width="medium", app_title="${cleanName}")
+
+
+@app.cell
+def _():
+    import marimo as mo
+    import sys
+    sys.stdout.reconfigure(encoding="utf-8")
+    return (mo,)
+
+
+if __name__ == "__main__":
+    app.run()
+`;
+    writeFileSync(targetFile, template, 'utf8');
+  }
+
+  const notebooks = listNotebooks(activeWorkspaceRoot, convId);
+  return {
+    success: true,
+    activeNotebookRel: targetRel,
+    url: `http://127.0.0.1:${DEFAULT_PORT}/?file=${encodeURIComponent(targetRel)}`,
+    notebooks
   };
 });
 
