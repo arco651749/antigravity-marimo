@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, statSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join, relative, resolve, basename, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import http from 'node:http';
 import { SidecarApp, Response } from 'sidecar_sdk';
 
@@ -23,6 +23,7 @@ function toLocalPath(uriOrPath) {
 
 // Current active workspace root (dynamic)
 let activeWorkspaceRoot = null;
+let runningWorkspaceDir = null;
 let activeNotebookRel = 'toolbox/agent_toolbox.py';
 const DEFAULT_PORT = 2718;
 let marimoChild = null;
@@ -61,6 +62,22 @@ function checkServerAlive(port = DEFAULT_PORT) {
   });
 }
 
+// Kill any process currently listening on target port (cleans up orphaned servers)
+function killPortListener(port = DEFAULT_PORT) {
+  if (process.platform === 'win32') {
+    try {
+      execFileSync('powershell.exe', [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `Get-NetTCPConnection -LocalPort ${port} -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }`
+      ]);
+    } catch (e) {
+      // ignore
+    }
+  }
+}
+
 // Ensure default starter notebook exists in the given workspace
 function ensureStarterNotebook(wsDir) {
   const toolboxDir = join(wsDir, 'toolbox');
@@ -69,7 +86,11 @@ function ensureStarterNotebook(wsDir) {
   }
   const starterFile = join(toolboxDir, 'agent_toolbox.py');
   if (!existsSync(starterFile)) {
-    const template = `import marimo
+    const repoStarter = join(wsDir, 'antigravity-marimo', 'toolbox', 'agent_toolbox.py');
+    if (existsSync(repoStarter)) {
+      writeFileSync(starterFile, readFileSync(repoStarter, 'utf8'), 'utf8');
+    } else {
+      const template = `import marimo
 
 __generated_with = "0.25.1"
 app = marimo.App(width="medium", app_title="Agent Toolbox")
@@ -96,54 +117,11 @@ def _(mo):
     return
 
 
-@app.cell
-def _(mo):
-    mo.md(
-        r"""
-        ---
-        ## 📌 模組 1：文字編碼清理與統計器
-        * **踩坑紀錄**：Windows 預設 \`cp950\` 常導致中文字元與 Emoji 寫入終端或檔案時崩潰，已採用強制 UTF-8 規範。
-        * **修改原因**：供快速清洗字串、計算行數與預覽開頭內容。
-        """
-    )
-    return
-
-
-@app.cell
-def _():
-    def clean_text_data(raw_text: str, remove_blank: bool = True) -> dict:
-        """核心邏輯：純 Python 函式，可直接被外部 import 或匯出。"""
-        lines = raw_text.splitlines()
-        if remove_blank:
-            lines = [line.strip() for line in lines if line.strip()]
-        return {
-            "total_lines": len(lines),
-            "char_count": sum(len(line) for line in lines),
-            "preview": lines[:8]
-        }
-    return (clean_text_data,)
-
-
-@app.cell
-def _(clean_text_data, mo):
-    txt_input = mo.ui.text_area(value="Hello Antigravity Marimo!\\n支援自動切換專案目錄 🚀", label="輸入待處理文字")
-    btn_exec = mo.ui.run_button(label="🚀 執行處理")
-
-    res = clean_text_data(txt_input.value) if (btn_exec.value or txt_input.value) else None
-
-    mo.vstack([
-        mo.md("### 🎛️ 自助操作面板"),
-        txt_input,
-        btn_exec,
-        mo.ui.json(res) if res else mo.md("_請輸入文字並點擊執行_")
-    ])
-    return btn_exec, res, txt_input
-
-
 if __name__ == "__main__":
     app.run()
 `;
-    writeFileSync(starterFile, template, 'utf8');
+      writeFileSync(starterFile, template, 'utf8');
+    }
   }
   return starterFile;
 }
@@ -193,8 +171,13 @@ async function startMarimo(wsDir = activeWorkspaceRoot) {
 
   const isAlive = await checkServerAlive(DEFAULT_PORT);
   if (isAlive) {
-    console.log(`[Marimo Sidecar] Server already running on port ${DEFAULT_PORT}`);
-    return true;
+    if (runningWorkspaceDir === wsDir) {
+      console.log(`[Marimo Sidecar] Server already running on port ${DEFAULT_PORT} for ${wsDir}`);
+      return true;
+    }
+    console.log(`[Marimo Sidecar] Server running on port ${DEFAULT_PORT} is from old workspace (${runningWorkspaceDir}), killing it...`);
+    stopMarimo();
+    await new Promise(r => setTimeout(r, 600));
   }
 
   const { cmd, prefixArgs } = getMarimoExec();
@@ -209,7 +192,7 @@ async function startMarimo(wsDir = activeWorkspaceRoot) {
     '-p', String(DEFAULT_PORT)
   ];
 
-  console.log(`[Marimo Sidecar] Launching Marimo in: ${wsDir}`);
+  console.log(`[Marimo Sidecar] Spawning Marimo in: ${wsDir}`);
   
   marimoChild = spawn(cmd, args, {
     cwd: wsDir,
@@ -218,18 +201,21 @@ async function startMarimo(wsDir = activeWorkspaceRoot) {
     detached: false
   });
 
+  runningWorkspaceDir = wsDir;
+
   marimoChild.stdout?.on('data', (d) => console.log(`[Marimo stdout] ${d}`));
   marimoChild.stderr?.on('data', (d) => console.error(`[Marimo stderr] ${d}`));
 
   marimoChild.on('exit', (code) => {
     console.log(`[Marimo Sidecar] Process exited with code ${code}`);
     marimoChild = null;
+    runningWorkspaceDir = null;
   });
 
   for (let i = 0; i < 16; i++) {
     await new Promise((r) => setTimeout(r, 400));
     if (await checkServerAlive(DEFAULT_PORT)) {
-      console.log(`[Marimo Sidecar] Server is ready on port ${DEFAULT_PORT} for ${wsDir}`);
+      console.log(`[Marimo Sidecar] Server is ready on port ${DEFAULT_PORT} in ${wsDir}`);
       return true;
     }
   }
@@ -237,7 +223,7 @@ async function startMarimo(wsDir = activeWorkspaceRoot) {
   return false;
 }
 
-// Stop Marimo process
+// Stop Marimo process and clear port
 function stopMarimo() {
   if (marimoChild) {
     try {
@@ -247,6 +233,8 @@ function stopMarimo() {
     }
     marimoChild = null;
   }
+  killPortListener(DEFAULT_PORT);
+  runningWorkspaceDir = null;
 }
 
 process.on('exit', stopMarimo);
@@ -282,12 +270,10 @@ app.api('/api/status', async () => {
 // Dynamically sync active workspace from Antigravity IDE
 app.api('/api/workspace', async (data) => {
   const targetPath = toLocalPath(data?.uri || data?.path || data?.workspaceUri);
-  if (targetPath && existsSync(targetPath) && targetPath !== activeWorkspaceRoot) {
-    console.log(`[Marimo Sidecar] Switching workspace from ${activeWorkspaceRoot} -> ${targetPath}`);
+  if (targetPath && existsSync(targetPath) && (targetPath !== activeWorkspaceRoot || runningWorkspaceDir !== targetPath)) {
+    console.log(`[Marimo Sidecar] Switching workspace to: ${targetPath}`);
     activeWorkspaceRoot = targetPath;
     activeNotebookRel = 'toolbox/agent_toolbox.py';
-    stopMarimo();
-    await new Promise((r) => setTimeout(r, 600));
     await startMarimo(activeWorkspaceRoot);
   }
   
