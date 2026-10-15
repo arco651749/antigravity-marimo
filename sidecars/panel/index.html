@@ -42,8 +42,8 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 0 12px;
-      gap: 10px;
+      padding: 0 10px;
+      gap: 8px;
       user-select: none;
       z-index: 10;
       flex-shrink: 0;
@@ -52,13 +52,13 @@
     .brand-section {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 7px;
       min-width: 0;
     }
 
     .brand-icon {
-      width: 22px;
-      height: 22px;
+      width: 20px;
+      height: 20px;
       flex-shrink: 0;
     }
 
@@ -71,7 +71,7 @@
 
     .notebook-selector-container {
       flex: 1;
-      max-width: 240px;
+      max-width: 260px;
       display: flex;
       align-items: center;
     }
@@ -89,6 +89,7 @@
       text-overflow: ellipsis;
       overflow: hidden;
       white-space: nowrap;
+      transition: border-color 0.15s ease;
     }
 
     .notebook-select:focus {
@@ -98,15 +99,15 @@
     .actions-section {
       display: flex;
       align-items: center;
-      gap: 6px;
+      gap: 5px;
     }
 
     .status-badge {
       display: inline-flex;
       align-items: center;
-      gap: 6px;
+      gap: 5px;
       font-size: 11px;
-      padding: 3px 8px;
+      padding: 3px 7px;
       border-radius: 9999px;
       background-color: rgba(16, 185, 129, 0.1);
       color: var(--accent-green);
@@ -114,8 +115,8 @@
     }
 
     .status-dot {
-      width: 7px;
-      height: 7px;
+      width: 6px;
+      height: 6px;
       border-radius: 50%;
       background-color: var(--accent-green);
       animation: pulse 2s infinite ease-in-out;
@@ -181,7 +182,7 @@
       justify-content: center;
       gap: 16px;
       z-index: 5;
-      transition: opacity 0.3s ease;
+      transition: opacity 0.2s ease;
     }
 
     .overlay.hidden {
@@ -190,8 +191,8 @@
     }
 
     .spinner {
-      width: 36px;
-      height: 36px;
+      width: 32px;
+      height: 32px;
       border: 3px solid rgba(16, 185, 129, 0.2);
       border-top-color: var(--accent-green);
       border-radius: 50%;
@@ -250,26 +251,30 @@
     </div>
 
     <div class="notebook-selector-container">
-      <select id="notebookSelect" class="notebook-select" title="切換當前編輯的筆記本">
-        <option value="">正在載入筆記本...</option>
+      <select id="notebookSelect" class="notebook-select" title="切換當前編輯的筆記本 (即時無延遲)">
+        <option value="">正在載入筆記本清單...</option>
       </select>
     </div>
 
     <div class="actions-section">
       <div id="statusBadge" class="status-badge">
         <span id="statusDot" class="status-dot"></span>
-        <span id="statusText">啟動中</span>
+        <span id="statusText">連線中</span>
       </div>
 
-      <button id="btnReload" class="btn-icon" title="重新整理筆記本畫面">
+      <button id="btnReload" class="btn-icon" title="重新整理當前筆記本畫面">
         <svg viewBox="0 0 24 24"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
       </button>
 
-      <button id="btnRestart" class="btn-icon" title="重新啟動 Marimo 服務">
+      <button id="btnHome" class="btn-icon" title="查看工作區首頁與筆記清單">
+        <svg viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+      </button>
+
+      <button id="btnRestart" class="btn-icon" title="強制重啟 Marimo 伺服器">
         <svg viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
       </button>
 
-      <button id="btnExternal" class="btn-icon" title="在外部瀏覽器打開">
+      <button id="btnExternal" class="btn-icon" title="在外部瀏覽器打開此筆記本">
         <svg viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
       </button>
     </div>
@@ -280,7 +285,7 @@
     <div id="overlay" class="overlay">
       <div class="spinner"></div>
       <div id="overlayTitle" class="overlay-title">正在連接 Marimo 服務...</div>
-      <div id="overlayDesc" class="overlay-desc">正在啟動背景 Python 核心與熱重載監控 (Port 2718)</div>
+      <div id="overlayDesc" class="overlay-desc">正在啟動背景目錄工作區伺服器 (Port 2718)</div>
       <button id="btnStartServer" class="btn-primary" style="display: none;">啟動 Marimo 服務</button>
     </div>
     <iframe id="marimoFrame" src="about:blank"></iframe>
@@ -297,12 +302,18 @@
     const statusBadge = document.getElementById("statusBadge");
     const notebookSelect = document.getElementById("notebookSelect");
     const btnReload = document.getElementById("btnReload");
+    const btnHome = document.getElementById("btnHome");
     const btnRestart = document.getElementById("btnRestart");
     const btnExternal = document.getElementById("btnExternal");
     const btnStartServer = document.getElementById("btnStartServer");
 
     let isConnected = false;
     let currentNotebook = "";
+
+    function getTargetUrl(fileRel) {
+      if (!fileRel) return MARIMO_BASE_URL;
+      return MARIMO_BASE_URL + "/?file=" + encodeURIComponent(fileRel);
+    }
 
     async function checkStatus() {
       try {
@@ -321,8 +332,10 @@
             statusBadge.style.backgroundColor = "rgba(16, 185, 129, 0.1)";
             overlay.classList.add("hidden");
             btnStartServer.style.display = "none";
+            
+            // Initial load with active notebook
             if (iframe.src === "about:blank" || !iframe.src.includes("2718")) {
-              iframe.src = MARIMO_BASE_URL;
+              iframe.src = getTargetUrl(data.activeNotebookRel);
             }
           }
         } else {
@@ -346,58 +359,62 @@
     function updateNotebooksDropdown(notebooks, activeRel) {
       if (!notebooks || notebooks.length === 0) return;
       
-      const currentSelected = notebookSelect.value;
-      notebookSelect.innerHTML = "";
-      
-      notebooks.forEach(nb => {
-        const opt = document.createElement("option");
-        opt.value = nb.relativePath;
-        opt.textContent = nb.name;
-        if (nb.relativePath === activeRel) {
-          opt.selected = true;
-        }
-        notebookSelect.appendChild(opt);
-      });
-      currentNotebook = activeRel;
+      const prevVal = notebookSelect.value;
+      // Only rebuild dropdown if count changed or empty
+      if (notebookSelect.options.length !== notebooks.length) {
+        notebookSelect.innerHTML = "";
+        notebooks.forEach(nb => {
+          const opt = document.createElement("option");
+          opt.value = nb.relativePath;
+          opt.textContent = nb.name;
+          if (nb.relativePath === (activeRel || prevVal)) {
+            opt.selected = true;
+          }
+          notebookSelect.appendChild(opt);
+        });
+      }
+      if (activeRel && !currentNotebook) {
+        currentNotebook = activeRel;
+      }
     }
 
+    // Instant switch without server kill or artificial delay
     notebookSelect.addEventListener("change", async (e) => {
       const selected = e.target.value;
       if (!selected || selected === currentNotebook) return;
       
-      overlayTitle.textContent = "切換筆記本中...";
-      overlayDesc.textContent = "正在載入 " + selected;
-      overlay.classList.remove("hidden");
-      
-      try {
-        await fetch("/api/switch-notebook", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ notebook: selected })
-        });
-        setTimeout(() => {
-          iframe.src = MARIMO_BASE_URL;
-          checkStatus();
-        }, 1200);
-      } catch (err) {
-        alert("切換筆記本失敗: " + err.message);
-      }
+      currentNotebook = selected;
+      const targetUrl = getTargetUrl(selected);
+
+      // Instantly navigate iframe (zero reboot!)
+      iframe.src = targetUrl;
+
+      // Notify backend to remember active notebook in background
+      fetch("/api/switch-notebook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ notebook: selected })
+      }).catch(console.warn);
     });
 
     btnReload.addEventListener("click", () => {
-      iframe.src = MARIMO_BASE_URL;
+      iframe.src = getTargetUrl(currentNotebook);
+    });
+
+    btnHome.addEventListener("click", () => {
+      iframe.src = MARIMO_BASE_URL + "/";
     });
 
     btnRestart.addEventListener("click", async () => {
       overlayTitle.textContent = "正在重啟 Marimo 伺服器...";
-      overlayDesc.textContent = "正在清理舊有進程並重新啟動核心...";
+      overlayDesc.textContent = "正在重新啟動核心服務...";
       overlay.classList.remove("hidden");
       try {
         await fetch("/api/restart", { method: "POST" });
         setTimeout(() => {
-          iframe.src = MARIMO_BASE_URL;
+          iframe.src = getTargetUrl(currentNotebook);
           checkStatus();
-        }, 1500);
+        }, 1200);
       } catch (err) {
         alert("重啟失敗: " + err.message);
       }
@@ -408,7 +425,7 @@
       btnStartServer.style.display = "none";
       try {
         await fetch("/api/start", { method: "POST" });
-        setTimeout(checkStatus, 1500);
+        setTimeout(checkStatus, 1200);
       } catch (err) {
         alert("啟動失敗: " + err.message);
         btnStartServer.style.display = "inline-flex";
@@ -416,7 +433,7 @@
     });
 
     btnExternal.addEventListener("click", () => {
-      window.open(MARIMO_BASE_URL, "_blank");
+      window.open(getTargetUrl(currentNotebook), "_blank");
     });
 
     // Start polling

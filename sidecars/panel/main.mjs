@@ -15,7 +15,6 @@ function resolveWorkspaceRoot() {
   if (envRoot && existsSync(envRoot)) {
     return resolve(envRoot);
   }
-  // Fallback to active project directory
   const fallback = 'd:\\AntiGravity\\Agent-Study';
   if (existsSync(fallback)) return resolve(fallback);
   return process.cwd();
@@ -57,94 +56,11 @@ function ensureStarterNotebook() {
   }
   const starterFile = join(toolboxDir, 'agent_toolbox.py');
   if (!existsSync(starterFile)) {
-    const template = `import marimo
-
-__generated_with = "0.25.1"
-app = marimo.App(width="medium", app_title="Agent Toolbox")
-
-
-@app.cell
-def _():
-    import marimo as mo
-    return (mo,)
-
-
-@app.cell
-def _(mo):
-    mo.md(
-        r"""
-        # 🛠️ Antigravity Agent Toolbox
-        > **活文檔代碼庫 (Living Executable Documentation)**
-        > 
-        > 本筆記本由 Antigravity AI Agent 與使用者共同維護：
-        > - 每個模組包含 **📝 踩坑紀錄 (Gotchas)**、**⚙️ 純邏輯函式** 與 **🎛️ 互動測試面板**。
-        > - 支援在 Antigravity 側邊欄即時執行、熱重載，並可一鍵匯出為獨立生產程式。
-        """
-    )
-    return
-
-
-@app.cell
-def _(mo):
-    mo.md(
-        r"""
-        ---
-        ## 📌 模組 1：文字編碼清理與統計器
-        * **踩坑紀錄**：Windows 預設 \`cp950\` 常導致中文字元與 Emoji 寫入終端或檔案時崩潰，已採用強制 UTF-8 規範。
-        * **修改原因**：供快速清洗字串、計算行數與預覽開頭內容。
-        """
-    )
-    return
-
-
-@app.cell
-def _():
-    def clean_text_data(raw_text: str, remove_blank: bool = True) -> dict:
-        """核心邏輯：純 Python 函式，可直接被外部 import 或匯出。"""
-        lines = raw_text.splitlines()
-        if remove_blank:
-            lines = [line.strip() for line in lines if line.strip()]
-        return {
-            "total_lines": len(lines),
-            "char_count": sum(len(line) for line in lines),
-            "preview": lines[:8]
-        }
-    return (clean_text_data,)
-
-
-@app.cell
-def _(clean_text_data, mo):
-    # 互動式操作元件
-    sample_text = (
-        "Antigravity Marimo Extension\\n"
-        "支援雙向即時同步\\n"
-        "\\n"
-        "測試行 1\\n"
-        "測試行 2 (Unicode: 🚀 ✨)"
-    )
-    txt_input = mo.ui.text_area(value=sample_text, label="輸入待處理文字")
-    chk_blank = mo.ui.checkbox(value=True, label="過濾空白行")
-    btn_exec = mo.ui.run_button(label="🚀 執行處理")
-
-    controls = mo.vstack([
-        txt_input,
-        mo.hstack([chk_blank, btn_exec], justify="start", gap=1)
-    ])
-
-    res = clean_text_data(txt_input.value, chk_blank.value) if (btn_exec.value or txt_input.value) else None
-
-    mo.vstack([
-        mo.md("### 🎛️ 自助操作面板"),
-        controls,
-        mo.ui.json(res) if res else mo.md("_請輸入文字並點擊執行_")
-    ])
-    return btn_exec, chk_blank, controls, res, sample_text, txt_input
-
-
-if __name__ == "__main__":
-    app.run()
-`;
-    writeFileSync(starterFile, template, 'utf8');
+    // If not found in workspace toolbox, check antigravity-marimo/toolbox
+    const repoStarter = join(workspaceRoot, 'antigravity-marimo', 'toolbox', 'agent_toolbox.py');
+    if (existsSync(repoStarter)) {
+      writeFileSync(starterFile, readFileSync(repoStarter, 'utf8'), 'utf8');
+    }
   }
   return starterFile;
 }
@@ -186,12 +102,12 @@ function listNotebooks() {
   return results;
 }
 
-// Start Marimo Edit Server
-async function startMarimo(targetNotebook = null) {
-  if (!targetNotebook) {
-    targetNotebook = ensureStarterNotebook();
+// Start Marimo in Directory Workspace Mode (single server, instant multi-file routing)
+async function startMarimo() {
+  ensureStarterNotebook();
+  if (!activeNotebook) {
+    activeNotebook = 'toolbox/agent_toolbox.py';
   }
-  activeNotebook = targetNotebook;
 
   const isAlive = await checkServerAlive(DEFAULT_PORT);
   if (isAlive) {
@@ -200,10 +116,11 @@ async function startMarimo(targetNotebook = null) {
   }
 
   const { cmd, prefixArgs } = getMarimoExec();
+  // Pass '.' to start directory workspace mode!
   const args = [
     ...prefixArgs,
     'edit',
-    activeNotebook,
+    '.',
     '--headless',
     '--no-token',
     '--watch',
@@ -211,7 +128,7 @@ async function startMarimo(targetNotebook = null) {
     '-p', String(DEFAULT_PORT)
   ];
 
-  console.log(`[Marimo Sidecar] Spawning: ${cmd} ${args.join(' ')}`);
+  console.log(`[Marimo Sidecar] Spawning in directory mode: ${cmd} ${args.join(' ')} (cwd: ${workspaceRoot})`);
   
   marimoChild = spawn(cmd, args, {
     cwd: workspaceRoot,
@@ -230,7 +147,7 @@ async function startMarimo(targetNotebook = null) {
 
   // Poll until ready or timeout (up to 8s)
   for (let i = 0; i < 16; i++) {
-    await new Promise((r) => setTimeout(r, 500));
+    await new Promise((r) => setTimeout(r, 400));
     if (await checkServerAlive(DEFAULT_PORT)) {
       console.log(`[Marimo Sidecar] Server is ready on port ${DEFAULT_PORT}`);
       return true;
@@ -268,41 +185,43 @@ app.page('/', () => readLocal('index.html'));
 app.api('/api/status', async () => {
   const isAlive = await checkServerAlive(DEFAULT_PORT);
   const notebooks = listNotebooks();
+  const relPath = activeNotebook ? activeNotebook.replace(/\\\\/g, '/') : 'toolbox/agent_toolbox.py';
   return {
     running: isAlive,
     port: DEFAULT_PORT,
     url: `http://127.0.0.1:${DEFAULT_PORT}`,
-    activeNotebook: activeNotebook || ensureStarterNotebook(),
-    activeNotebookRel: relative(workspaceRoot, activeNotebook || ensureStarterNotebook()).replace(/\\\\/g, '/'),
+    notebookUrl: `http://127.0.0.1:${DEFAULT_PORT}/?file=${encodeURIComponent(relPath)}`,
+    activeNotebook: resolve(workspaceRoot, relPath),
+    activeNotebookRel: relPath,
     workspaceRoot: workspaceRoot.replace(/\\\\/g, '/'),
     notebooks
   };
 }, 'GET');
 
-app.api('/api/start', async (data) => {
-  const notebook = data?.notebook ? resolve(workspaceRoot, data.notebook) : activeNotebook;
-  const started = await startMarimo(notebook);
-  return { success: started, port: DEFAULT_PORT, activeNotebook };
+app.api('/api/start', async () => {
+  const started = await startMarimo();
+  return { success: started, port: DEFAULT_PORT };
 });
 
 app.api('/api/restart', async () => {
   stopMarimo();
-  await new Promise((r) => setTimeout(r, 800));
-  const started = await startMarimo(activeNotebook);
+  await new Promise((r) => setTimeout(r, 600));
+  const started = await startMarimo();
   return { success: started };
 });
 
+// Lightning-fast notebook switch: NO PROCESS KILL, NO REBOOT!
 app.api('/api/switch-notebook', async (data) => {
   if (!data?.notebook) return { error: 'Missing notebook path' };
-  const target = resolve(workspaceRoot, data.notebook);
-  stopMarimo();
-  await new Promise((r) => setTimeout(r, 800));
-  const started = await startMarimo(target);
-  return { success: started, activeNotebook: target };
+  activeNotebook = data.notebook.replace(/\\\\/g, '/');
+  return { 
+    success: true, 
+    activeNotebookRel: activeNotebook,
+    url: `http://127.0.0.1:${DEFAULT_PORT}/?file=${encodeURIComponent(activeNotebook)}`
+  };
 });
 
-// Auto-start Marimo on launch
-ensureStarterNotebook();
+// Auto-start Marimo in directory mode
 startMarimo().catch(console.error);
 
 app.run();
