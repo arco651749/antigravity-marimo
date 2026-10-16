@@ -731,6 +731,9 @@
           if (nb.role === 'current_session') {
             opt.style.fontWeight = 'bold';
             opt.style.color = 'var(--accent-purple)';
+          } else if (nb.role === 'shared_toolbox') {
+            opt.style.fontWeight = 'bold';
+            opt.style.color = 'var(--accent-blue)';
           }
           if (nb.relativePath === targetVal) {
             opt.selected = true;

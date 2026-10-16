@@ -1,9 +1,9 @@
 import { existsSync, readdirSync, statSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { dirname, join, relative, resolve, basename, extname } from 'node:path';
+import { dirname, join, relative, resolve, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn, execFileSync } from 'node:child_process';
 import http from 'node:http';
-import { SidecarApp, Response } from 'sidecar_sdk';
+import { SidecarApp } from 'sidecar_sdk';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -23,9 +23,7 @@ function toLocalPath(uriOrPath) {
 
 // Current active workspace root (dynamic)
 let activeWorkspaceRoot = null;
-let runningWorkspaceDir = null;
 const DEFAULT_PORT = 2718;
-let marimoChild = null;
 
 // Determine initial workspace root
 function resolveInitialWorkspace() {
@@ -38,8 +36,20 @@ function resolveInitialWorkspace() {
 
 activeWorkspaceRoot = resolveInitialWorkspace();
 
-// Find Python / Marimo executable
-function getMarimoExec() {
+// Find Python / Marimo executable (prioritize workspace .venv / venv first)
+function getMarimoExec(wsDir = activeWorkspaceRoot) {
+  if (wsDir) {
+    const venvMarimoCandidates = [
+      join(wsDir, '.venv', 'Scripts', 'marimo.exe'),
+      join(wsDir, 'venv', 'Scripts', 'marimo.exe'),
+      join(wsDir, '.env', 'Scripts', 'marimo.exe')
+    ];
+    for (const candidate of venvMarimoCandidates) {
+      if (existsSync(candidate)) {
+        return { cmd: candidate, prefixArgs: [] };
+      }
+    }
+  }
   const marimoCli = 'C:\\Python312\\Scripts\\marimo.exe';
   if (existsSync(marimoCli)) return { cmd: marimoCli, prefixArgs: [] };
   const pyExe = 'C:\\Python312\\python.exe';
@@ -71,16 +81,27 @@ function killPortListener(port = DEFAULT_PORT) {
         '-Command',
         `Get-NetTCPConnection -LocalPort ${port} -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }`
       ]);
-    } catch (e) {
+    } catch {
       // ignore
     }
   }
 }
 
-// Ensure per-conversation session directory & marimo_session.py inside .marimo/<sessionId>/
+// Sanitize conversation ID (returns null if invalid, 'default', or '_new')
+function sanitizeConvId(convId) {
+  if (!convId) return null;
+  const clean = String(convId).replace(/[^a-zA-Z0-9_-]/g, '');
+  const lower = clean.toLowerCase();
+  if (!clean || lower === 'default' || lower === '_new' || lower === 'null' || lower === 'undefined') {
+    return null;
+  }
+  return clean;
+}
+
+// Ensure .marimo/shared_toolbox.py and (only when convId is valid) .marimo/<sessionId>/marimo_session.py
 function ensureNotebooks(wsDir, convId = null) {
   if (!wsDir || !existsSync(wsDir)) {
-    return { sessionRelPath: '' };
+    return { sessionRelPath: '', sharedRelPath: '' };
   }
 
   const marimoBaseDir = join(wsDir, '.marimo');
@@ -88,8 +109,52 @@ function ensureNotebooks(wsDir, convId = null) {
     mkdirSync(marimoBaseDir, { recursive: true });
   }
 
-  // Use clean alphanumeric ID or 'default'
-  const sessionId = convId ? convId.replace(/[^a-zA-Z0-9_-]/g, '') : 'default';
+  // Always ensure project-wide shared_toolbox.py exists
+  const sharedFilename = 'shared_toolbox.py';
+  const sharedFile = join(marimoBaseDir, sharedFilename);
+  const sharedRelPath = `.marimo/${sharedFilename}`;
+
+  if (!existsSync(sharedFile)) {
+    const sharedTemplate = `import marimo
+
+__generated_with = "0.25.1"
+app = marimo.App(width="medium", app_title="Project Shared Toolbox")
+
+
+@app.cell
+def _():
+    import marimo as mo
+    import sys
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+    return (mo,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    # 📦 專案共用工具箱 (Shared Toolbox)
+    > **跨會話活文檔 (Cross-Session Living Documentation)**  
+    > 
+    > 本筆記本為專案層級的共用資產庫，跨越所有對話視窗永久留存：
+    > - 各會話中驗證成熟、高重用價值的核心 Python 工具與踩坑紀錄 (Gotchas) 可沉澱於此。
+    > - 檔案路徑：\`.marimo/shared_toolbox.py\`
+    """)
+    return
+
+
+if __name__ == "__main__":
+    app.run()
+`;
+    writeFileSync(sharedFile, sharedTemplate, 'utf8');
+  }
+
+  const sessionId = sanitizeConvId(convId);
+  // Do NOT create a dummy 'default' or '_new' directory when convId is absent
+  if (!sessionId) {
+    return { sessionRelPath: sharedRelPath, sharedRelPath };
+  }
+
   const sessionDir = join(marimoBaseDir, sessionId);
   if (!existsSync(sessionDir)) {
     mkdirSync(sessionDir, { recursive: true });
@@ -111,34 +176,31 @@ app = marimo.App(width="medium", app_title="Marimo Session ${shortId}")
 def _():
     import marimo as mo
     import sys
-    sys.stdout.reconfigure(encoding="utf-8")
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     return (mo,)
 
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        r"""
-        # 💬 會話專屬筆記本 (Session: ${shortId})
-        > **會話識別碼**：\`${convId || sessionId}\`  
-        > 
-        > 本筆記本由當前 Antigravity 對話視窗獨立持有：
-        > - 變數、執行狀態與除錯過程與其他對話完全隔離，互不干擾。
-        > - 檔案路徑：\`.marimo/${sessionId}/${sessionFilename}\`
-        """
-    )
+    mo.md(r"""
+    # 💬 會話專屬筆記本 (Session: ${shortId})
+    > **會話識別碼**：\`${sessionId}\`  
+    > 
+    > 本筆記本由當前 Antigravity 對話視窗獨立持有：
+    > - 變數、執行狀態與除錯過程與其他對話完全隔離，互不干擾。
+    > - 檔案路徑：\`.marimo/${sessionId}/${sessionFilename}\`
+    """)
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        r"""
-        ---
-        ## 📌 會話專屬程式碼與 Gotchas
-        * 在此會話中產生的 Python 程式碼、踩坑點與互動控制面板皆記錄於此。
-        """
-    )
+    mo.md(r"""
+    ---
+    ## 📌 會話專屬程式碼與 Gotchas
+    * 在此會話中產生的 Python 程式碼、踩坑點與互動控制面板皆記錄於此。
+    """)
     return
 
 
@@ -148,60 +210,77 @@ if __name__ == "__main__":
     writeFileSync(sessionFile, sessionTemplate, 'utf8');
   }
 
-  return { sessionRelPath };
+  return { sessionRelPath, sharedRelPath };
 }
 
-// Find all marimo notebooks belonging STRICTLY to the current conversation session
+// Find marimo notebooks belonging to current conversation session + project shared toolbox
 function listNotebooks(wsDir, currentConvId = null) {
   const results = [];
   if (!wsDir || !existsSync(wsDir)) return results;
 
-  const sessionId = currentConvId ? currentConvId.replace(/[^a-zA-Z0-9_-]/g, '') : 'default';
-  const sessionDir = join(wsDir, '.marimo', sessionId);
+  const sessionId = sanitizeConvId(currentConvId);
+  if (sessionId) {
+    const sessionDir = join(wsDir, '.marimo', sessionId);
+    if (existsSync(sessionDir)) {
+      try {
+        const entries = readdirSync(sessionDir, { withFileTypes: true });
+        for (const entry of entries) {
+          if (entry.isFile() && entry.name.endsWith('.py')) {
+            const fullPath = join(sessionDir, entry.name);
+            try {
+              const content = readFileSync(fullPath, 'utf8');
+              if (content.includes('marimo.App(') || content.includes('import marimo')) {
+                const relPath = relative(wsDir, fullPath).replace(/\\/g, '/');
+                const isDefault = entry.name === 'marimo_session.py';
+                const displayName = isDefault
+                  ? `⭐️ 會話預設 (${entry.name})`
+                  : `📄 ${entry.name}`;
 
-  if (!existsSync(sessionDir)) {
-    return results;
-  }
-
-  try {
-    const entries = readdirSync(sessionDir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (entry.isFile() && entry.name.endsWith('.py')) {
-        const fullPath = join(sessionDir, entry.name);
-        try {
-          const content = readFileSync(fullPath, 'utf8');
-          if (content.includes('marimo.App(') || content.includes('import marimo')) {
-            const relPath = relative(wsDir, fullPath).replace(/\\/g, '/');
-            const isDefault = entry.name === 'marimo_session.py';
-            const displayName = isDefault
-              ? `⭐️ 會話預設 (${entry.name})`
-              : `📄 ${entry.name}`;
-
-            results.push({
-              absolutePath: fullPath,
-              relativePath: relPath,
-              name: entry.name,
-              displayName,
-              role: 'current_session',
-              isDefault,
-              size: statSync(fullPath).size
-            });
+                results.push({
+                  absolutePath: fullPath,
+                  relativePath: relPath,
+                  name: entry.name,
+                  displayName,
+                  role: 'current_session',
+                  isDefault,
+                  size: statSync(fullPath).size
+                });
+              }
+            } catch {
+              // ignore unreadable
+            }
           }
-        } catch {
-          // ignore unreadable
         }
+      } catch {
+        // ignore
       }
     }
-  } catch {
-    // ignore
   }
 
-  // Sort: marimo_session.py always first, then alphabetical
+  // Sort session notebooks: marimo_session.py first, then alphabetical
   results.sort((a, b) => {
     if (a.isDefault) return -1;
     if (b.isDefault) return 1;
     return a.name.localeCompare(b.name);
   });
+
+  // Append project-wide shared_toolbox.py so user & agent can access cross-session tools
+  const sharedFull = join(wsDir, '.marimo', 'shared_toolbox.py');
+  if (existsSync(sharedFull)) {
+    try {
+      results.push({
+        absolutePath: sharedFull,
+        relativePath: '.marimo/shared_toolbox.py',
+        name: 'shared_toolbox.py',
+        displayName: '📦 專案共用工具箱 (shared_toolbox.py)',
+        role: 'shared_toolbox',
+        isDefault: results.length === 0,
+        size: statSync(sharedFull).size
+      });
+    } catch {
+      // ignore
+    }
+  }
 
   return results;
 }
@@ -213,27 +292,6 @@ const startPromises = new Map();
 // Map to track the currently active notebook per workspace + conversation
 // key: `${cleanWs}:${sessionId}` -> relativePath (e.g. '.marimo/xxx/data_analysis.py')
 const sessionActiveNotebooks = new Map();
-
-function getActiveNotebook(wsDir, convId) {
-  const cleanWs = resolve(wsDir);
-  const sessionId = convId ? convId.replace(/[^a-zA-Z0-9_-]/g, '') : 'default';
-  const sessionKey = `${cleanWs}:${sessionId}`;
-  let activeRel = sessionActiveNotebooks.get(sessionKey);
-  if (activeRel && existsSync(join(cleanWs, activeRel))) {
-    return activeRel;
-  }
-  const { sessionRelPath } = ensureNotebooks(cleanWs, convId);
-  sessionActiveNotebooks.set(sessionKey, sessionRelPath);
-  return sessionRelPath;
-}
-
-function setActiveNotebook(wsDir, convId, relPath) {
-  if (!relPath) return;
-  const cleanWs = resolve(wsDir);
-  const sessionId = convId ? convId.replace(/[^a-zA-Z0-9_-]/g, '') : 'default';
-  const sessionKey = `${cleanWs}:${sessionId}`;
-  sessionActiveNotebooks.set(sessionKey, relPath.replace(/\\/g, '/'));
-}
 
 // Deterministic port allocation per workspace (2718-2767)
 function getPortForWorkspace(wsDir) {
@@ -247,10 +305,71 @@ function getPortForWorkspace(wsDir) {
   return DEFAULT_PORT + (Math.abs(hash) % 50);
 }
 
+// Persist server & session state to .marimo/server_state.json for instant AI Agent discovery
+function writeServerState(wsDir, runningOverride = null) {
+  if (!wsDir || !existsSync(wsDir)) return;
+  try {
+    const cleanWs = resolve(wsDir);
+    const marimoBaseDir = join(cleanWs, '.marimo');
+    if (!existsSync(marimoBaseDir)) {
+      mkdirSync(marimoBaseDir, { recursive: true });
+    }
+    const port = getPortForWorkspace(cleanWs);
+    const srvEntry = workspaceServers.get(cleanWs);
+    const isRunning = runningOverride !== null ? runningOverride : Boolean(srvEntry?.running);
+    const activeBySession = {};
+    for (const [k, v] of sessionActiveNotebooks.entries()) {
+      if (k.startsWith(`${cleanWs}:`)) {
+        const sId = k.slice(cleanWs.length + 1);
+        activeBySession[sId] = v;
+      }
+    }
+    const { cmd, prefixArgs } = getMarimoExec(cleanWs);
+    const statePayload = {
+      workspaceRoot: cleanWs.replace(/\\/g, '/'),
+      workspaceName: basename(cleanWs) || cleanWs,
+      port,
+      url: `http://127.0.0.1:${port}`,
+      running: isRunning,
+      pid: srvEntry?.child?.pid || null,
+      marimoExec: { cmd, prefixArgs },
+      sharedToolboxRel: '.marimo/shared_toolbox.py',
+      activeNotebooksBySession: activeBySession,
+      updatedAt: new Date().toISOString()
+    };
+    writeFileSync(join(marimoBaseDir, 'server_state.json'), JSON.stringify(statePayload, null, 2), 'utf8');
+  } catch (err) {
+    console.warn('[Marimo Sidecar] Failed to write server_state.json:', err);
+  }
+}
+
+function getActiveNotebook(wsDir, convId) {
+  const cleanWs = resolve(wsDir);
+  const sessionId = sanitizeConvId(convId) || 'shared';
+  const sessionKey = `${cleanWs}:${sessionId}`;
+  let activeRel = sessionActiveNotebooks.get(sessionKey);
+  if (activeRel && existsSync(join(cleanWs, activeRel))) {
+    return activeRel;
+  }
+  const { sessionRelPath } = ensureNotebooks(cleanWs, convId);
+  sessionActiveNotebooks.set(sessionKey, sessionRelPath);
+  writeServerState(cleanWs);
+  return sessionRelPath;
+}
+
+function setActiveNotebook(wsDir, convId, relPath) {
+  if (!relPath) return;
+  const cleanWs = resolve(wsDir);
+  const sessionId = sanitizeConvId(convId) || 'shared';
+  const sessionKey = `${cleanWs}:${sessionId}`;
+  sessionActiveNotebooks.set(sessionKey, relPath.replace(/\\/g, '/'));
+  writeServerState(cleanWs);
+}
+
 // Start Marimo for a specific workspace directory on its own dedicated port
 async function startMarimo(wsDir = activeWorkspaceRoot) {
   const cleanWs = resolve(wsDir);
-  ensureNotebooks(cleanWs);
+  ensureNotebooks(cleanWs, null);
   const port = getPortForWorkspace(cleanWs);
 
   // Return existing in-flight startup promise if already booting
@@ -264,6 +383,7 @@ async function startMarimo(wsDir = activeWorkspaceRoot) {
     if (isAlive) {
       const existing = workspaceServers.get(cleanWs);
       if (existing && existing.port === port && existing.running) {
+        writeServerState(cleanWs, true);
         console.log(`[Marimo Sidecar] Server already running on port ${port} for ${cleanWs}`);
         return { port, wsDir: cleanWs, running: true };
       }
@@ -273,7 +393,7 @@ async function startMarimo(wsDir = activeWorkspaceRoot) {
       await new Promise(r => setTimeout(r, 400));
     }
 
-    const { cmd, prefixArgs } = getMarimoExec();
+    const { cmd, prefixArgs } = getMarimoExec(cleanWs);
     const args = [
       ...prefixArgs,
       'edit',
@@ -303,6 +423,7 @@ async function startMarimo(wsDir = activeWorkspaceRoot) {
     child.on('exit', (code) => {
       console.log(`[Marimo Sidecar] Process for ${cleanWs} (port ${port}) exited with code ${code}`);
       workspaceServers.delete(cleanWs);
+      writeServerState(cleanWs, false);
     });
 
     for (let i = 0; i < 20; i++) {
@@ -310,10 +431,12 @@ async function startMarimo(wsDir = activeWorkspaceRoot) {
       if (await checkServerAlive(port)) {
         console.log(`[Marimo Sidecar] Server is ready on port ${port} in ${cleanWs}`);
         entry.running = true;
+        writeServerState(cleanWs, true);
         return { port, wsDir: cleanWs, running: true };
       }
     }
 
+    writeServerState(cleanWs, false);
     return { port, wsDir: cleanWs, running: false };
   })();
 
@@ -334,6 +457,7 @@ function stopAllMarimo() {
     if (entry.port) {
       killPortListener(entry.port);
     }
+    writeServerState(ws, false);
   }
   workspaceServers.clear();
 }
@@ -366,6 +490,7 @@ const handleStatus = async (data) => {
   ensureNotebooks(ws, convId);
   const activeRel = getActiveNotebook(ws, convId);
   const notebooks = listNotebooks(ws, convId);
+  writeServerState(ws, isAlive);
 
   return {
     running: isAlive,
@@ -399,6 +524,7 @@ app.api('/api/workspace', async (data) => {
   ensureNotebooks(activeWorkspaceRoot, convId);
   const activeRel = getActiveNotebook(activeWorkspaceRoot, convId);
   const notebooks = listNotebooks(activeWorkspaceRoot, convId);
+  writeServerState(activeWorkspaceRoot, isAlive);
 
   return {
     running: isAlive,
@@ -456,13 +582,13 @@ app.api('/api/new-notebook', async (data) => {
   if (cleanName.toLowerCase() === 'marimo.py') {
     cleanName = 'session_tool.py';
   }
-  const sessionId = convId ? convId.replace(/[^a-zA-Z0-9_-]/g, '') : 'default';
-  const sessionDir = join(ws, '.marimo', sessionId);
-  if (!existsSync(sessionDir)) {
-    mkdirSync(sessionDir, { recursive: true });
+  const sessionId = sanitizeConvId(convId);
+  const targetDir = sessionId ? join(ws, '.marimo', sessionId) : join(ws, '.marimo');
+  if (!existsSync(targetDir)) {
+    mkdirSync(targetDir, { recursive: true });
   }
-  const targetFile = join(sessionDir, cleanName);
-  const targetRel = `.marimo/${sessionId}/${cleanName}`;
+  const targetFile = join(targetDir, cleanName);
+  const targetRel = sessionId ? `.marimo/${sessionId}/${cleanName}` : `.marimo/${cleanName}`;
   if (!existsSync(targetFile)) {
     const template = `import marimo
 
@@ -474,7 +600,8 @@ app = marimo.App(width="medium", app_title="${cleanName}")
 def _():
     import marimo as mo
     import sys
-    sys.stdout.reconfigure(encoding="utf-8")
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     return (mo,)
 
 
