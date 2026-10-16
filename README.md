@@ -113,41 +113,39 @@ Copy-Item -Path ".\antigravity-marimo\*" -Destination "$HOME\.gemini\config\plug
 為確保筆記本符合 Marimo 的 DAG 規則並具備高度復用性，請遵循以下樣板：
 
 ```python
-# [區塊 1] 踩坑紀錄與說明
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        r"""
-        ---
-        ## 📌 模組：文字編碼清洗與統計器
-        * **最後修訂**：2026-10-16
-        * **踩坑紀錄 (Gotchas)**：
-          1. Windows 預設 cp950 常引發 UnicodeEncodeError，強制使用 UTF-8。
-          2. Marimo Cell 內設定 stdout 須加上 `if hasattr(sys.stdout, "reconfigure"):`。
-        * **修改原因**：快速清洗文字並統計行數。
-        """
-    )
+    # [區塊 1] 踩坑紀錄與說明
+    mo.md(r"""
+    ---
+    ## 📌 模組：文字編碼清洗與統計器
+    * **最後修訂**：2026-10-16
+    * **踩坑紀錄 (Gotchas)**：
+      1. Windows 預設 cp950 常引發 UnicodeEncodeError，強制使用 UTF-8。
+      2. Marimo Cell 內設定 stdout 須加上 `if hasattr(sys.stdout, "reconfigure"):`。
+    * **修改原因**：快速清洗文字並統計行數。
+    """)
     return
 
 
-# [區塊 2] 核心純函式邏輯 (推薦使用 @app.function)
 @app.function
 def clean_text_data(raw_text: str) -> dict:
-    """純 Python 函式：清理空白行並回傳統計結果。"""
+    """[區塊 2] 純 Python 函式：清理空白行並回傳統計結果。"""
     lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
     return {"total_lines": len(lines), "preview": lines[:5]}
 
 
-# [區塊 3] 自助互動操作面板 (展示層結尾保持 return 為空，避免 DAG 名稱碰撞)
 @app.cell
 def _(mo):
+    # [區塊 3A] 自助互動操作面板 - 控制器定義
     txt_input = mo.ui.text_area(value="測試文字", label="輸入文字")
     btn_exec = mo.ui.run_button(label="🚀 執行處理")
     return btn_exec, txt_input
 
 
 @app.cell
-def _(btn_exec, clean_text_data, mo, txt_input):
+def _(btn_exec, mo, txt_input):
+    # [區塊 3B] 自助互動操作面板 - 展示層結尾保持 return 為空，且 @app.function 直接呼叫不進參數列
     _res = clean_text_data(txt_input.value) if btn_exec.value else None
     mo.vstack([
         mo.md("### 🎛️ 自助操作台"),

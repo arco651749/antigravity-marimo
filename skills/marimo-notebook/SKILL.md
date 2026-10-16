@@ -45,10 +45,11 @@ python.exe -X utf8 $cli catalog --workspace "."
 ```
 
 ### Step 3：修改筆記本後強制自檢 (`check`) —— ⭐️ 必做閉環步驟
-每次編輯 `.py` 筆記本後，**必須立即執行 `check`**！它會自動完成三件事：
+每次編輯 `.py` 筆記本後，**必須立即執行 `check`**！它會自動完成四件事：
 1. 自動偵測並剝除誤寫入的 UTF-8 BOM (`U+FEFF`)。
 2. 透過 Python AST 檢查是否有 `@app.cell` 或 `@app.function` 被誤插在 `if __name__ == "__main__":` 之後。
-3. 執行 `marimo check` 檢驗是否有 `MultipleDefinitionError`、循環依賴或語法錯誤。
+3. 執行 `marimo check --fix` 自動修正縮排與簽名，並檢驗是否有 `MultipleDefinitionError`、循環依賴或語法錯誤。
+4. 驗證通過 (`"valid": true`) 時，**自動刷新全專案 `.marimo/catalog.json` 索引**。
 ```powershell
 python.exe -X utf8 $cli check --file ".marimo/<conversation_id>/marimo_session.py"
 ```
@@ -101,6 +102,8 @@ python.exe -X utf8 $cli toast --workspace "." --file ".marimo/<conversation_id>/
    * 預設筆記本必須命名為 **`marimo_session.py`**，**嚴禁命名為 `marimo.py`**（會遮蔽官方 `marimo` 套件導致 `AttributeError` 崩潰）。
 3. **Windows UTF-8 無 BOM 規範 (No-BOM Requirement)**：
    * 筆記本 `.py` 必須為 **UTF-8 No BOM**。執行 `marimo_agent_cli.py check` 會自動幫你檢測並剝除 BOM。
+4. **註解請寫在 Cell 函式內部 (No Top-Level Comments Outside Cells)**：
+   * Marimo 的 AST 序列化器在格式化檔案時會自動清除位於 `@app.cell` / `@app.function` 外部的模組頂層 `#` 註解。所有說明註解請寫在 `def _():` 內部或 `mo.md` 區塊中。
 
 ---
 
@@ -116,12 +119,13 @@ Marimo 檔案尾端固定為 `if __name__ == "__main__": app.run()`。
 
 ## 🛡️ DAG 作用域安全版規範 (Safe Three-Block Pattern)
 
-為了防止 Marimo 的 DAG 變數重複定義錯誤 (`MultipleDefinitionError`)，並兼顧「互動測試」與「可獨立匯出」，每個功能模組請遵循安全三區塊結構（區塊 2 可使用 `@app.function` 或 `@app.cell`）：
+為了防止 Marimo 的 DAG 變數重複定義錯誤 (`MultipleDefinitionError`)，並兼顧「互動測試」與「可獨立匯出」，每個功能模組請遵循安全三區塊結構：
+- **重要規則**：使用 `@app.function` 定義的頂層純函式屬於模組級符號，下游 `@app.cell` **直接呼叫即可，無需將該函式名稱列入 `def _(...)` 的參數列中**（只有其他 `@app.cell` `return` 的變數才需列入 `def _(...)` 參數）。
 
 ```python
-# [區塊 1] 活文檔說明與踩坑紀錄 (Markdown)
 @app.cell(hide_code=True)
 def _(mo):
+    # [區塊 1] 活文檔說明與踩坑紀錄 (Markdown)
     mo.md(r"""
     ---
     ## 📌 模組：資料分析與統計 (Data Summary)
@@ -134,11 +138,9 @@ def _(mo):
     return
 
 
-# [區塊 2] 核心純函式邏輯 (Pure Python Logic)
-# 方式 A：使用 @app.function 裝飾頂層純函式 (Marimo 0.25+ 推薦，天然具備獨立作用域)
 @app.function
 def compute_summary_stats(numbers_str: str) -> dict:
-    """純 Python 函式：無副作用、無全域依賴，可直接被外部 import 或匯出。"""
+    """[區塊 2] 純 Python 函式：無副作用、無全域依賴，可直接被外部 import 或匯出。"""
     nums = [float(x.strip()) for x in numbers_str.replace(",", " ").split() if x.strip()]
     if not nums:
         return {"count": 0, "mean": 0.0, "variance": 0.0}
@@ -147,19 +149,17 @@ def compute_summary_stats(numbers_str: str) -> dict:
     return {"count": len(nums), "mean": round(avg, 4), "variance": round(var, 4)}
 
 
-# [區塊 3] 自助互動測試面板 (Self-Service UI)
-# ⭐️ 核心防坑規則：
-# 1. 將創建 UI 元件與讀取 .value 分開，或使用底線前綴局部變數 (_res)
-# 2. 結尾嚴禁 return 泛用 UI 變數名稱 (如 ui_inp, ui_btn)，保持 return 為空！
 @app.cell
 def _(mo):
+    # [區塊 3A] 自助互動測試面板 - 控制器定義
     stats_inp = mo.ui.text_area(value="10, 20, 30, 40", label="輸入數值列表")
     stats_btn = mo.ui.run_button(label="⚡ 計算分佈")
     return stats_btn, stats_inp
 
 
 @app.cell
-def _(compute_summary_stats, mo, stats_btn, stats_inp):
+def _(mo, stats_btn, stats_inp):
+    # [區塊 3B] 自助互動測試面板 - 執行與展示 (注意：@app.function 的 compute_summary_stats 直接呼叫，不放入 def _(...) 參數)
     _res = compute_summary_stats(stats_inp.value) if stats_btn.value else None
     mo.vstack([
         mo.md("### 🎛️ 自助操作台"),

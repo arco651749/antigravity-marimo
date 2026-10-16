@@ -249,10 +249,24 @@ def cmd_check(args):
             errors.append(f"Failed to execute marimo check: {e}")
 
     is_valid = len(errors) == 0
+    catalog_updated = False
+    if is_valid:
+        # Auto-refresh .marimo/catalog.json if target resides inside a .marimo directory
+        for parent in target.parents:
+            if parent.name == ".marimo":
+                ws_root = parent.parent
+                try:
+                    build_catalog(ws_root)
+                    catalog_updated = True
+                except Exception:
+                    pass
+                break
+
     report = {
         "file": str(target).replace("\\", "/"),
         "valid": is_valid,
         "bomStripped": bom_stripped,
+        "catalogUpdated": catalog_updated,
         "marimoCheckOutput": marimo_out or "Passed (0 issues)",
         "errors": errors,
     }
@@ -324,8 +338,7 @@ def extract_notebook_metadata(py_file: Path, ws_path: Path) -> dict:
     }
 
 
-def cmd_catalog(args):
-    ws_path = Path(args.workspace).resolve()
+def build_catalog(ws_path: Path) -> dict:
     marimo_dir = ws_path / ".marimo"
     notebooks = []
     if marimo_dir.exists():
@@ -346,6 +359,12 @@ def cmd_catalog(args):
         (marimo_dir / "catalog.json").write_text(
             json.dumps(catalog_data, ensure_ascii=False, indent=2), encoding="utf-8"
         )
+    return catalog_data
+
+
+def cmd_catalog(args):
+    ws_path = Path(args.workspace).resolve()
+    catalog_data = build_catalog(ws_path)
     print(json.dumps(catalog_data, ensure_ascii=False, indent=2))
     return 0
 
