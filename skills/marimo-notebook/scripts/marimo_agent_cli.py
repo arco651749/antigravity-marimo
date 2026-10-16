@@ -231,12 +231,12 @@ def cmd_check(args):
     except SyntaxError as e:
         errors.append(f"SyntaxError at line {e.lineno}: {e.msg}")
 
-    # 2. Run marimo check
+    # 2. Run marimo check --fix (auto-fixes benign formatting like markdown-indentation while failing on real DAG errors)
     marimo_out = ""
     if not errors:
         try:
             proc = subprocess.run(
-                [sys.executable, "-X", "utf8", "-m", "marimo", "check", str(target)],
+                [sys.executable, "-X", "utf8", "-m", "marimo", "check", "--fix", str(target)],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
